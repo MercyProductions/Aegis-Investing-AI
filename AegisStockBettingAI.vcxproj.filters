@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{1F1C661D-D717-476B-ACBB-4E1659568601}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{2B92B8C5-E85E-4421-87C1-2215C9146F15}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ImGui">
+      <UniqueIdentifier>{92F37F51-93C2-494F-B3BC-37E1E5EC7E13}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\Json.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\Platform.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\Diagnostics.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\AlertEngine.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\AppSession.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\AppStorage.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\BrokerImport.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ReportExport.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\StockData.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\AdvancedAnalytics.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ProviderLayer.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\SelfTests.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\SettingsService.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\Main.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="imgui\imgui.cpp"><Filter>ImGui</Filter></ClCompile>
+    <ClCompile Include="imgui\imgui_draw.cpp"><Filter>ImGui</Filter></ClCompile>
+    <ClCompile Include="imgui\imgui_tables.cpp"><Filter>ImGui</Filter></ClCompile>
+    <ClCompile Include="imgui\imgui_widgets.cpp"><Filter>ImGui</Filter></ClCompile>
+    <ClCompile Include="imgui\backends\imgui_impl_dx11.cpp"><Filter>ImGui</Filter></ClCompile>
+    <ClCompile Include="imgui\backends\imgui_impl_win32.cpp"><Filter>ImGui</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\Json.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\Platform.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\Diagnostics.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\AlertEngine.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\AppSession.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\AppStorage.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\BrokerImport.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ReportExport.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\StockData.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\AdvancedAnalytics.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ProviderLayer.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\SelfTests.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\SettingsService.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="AegisStockBettingAI.config.ini" />
+    <None Include="README.md" />
+  </ItemGroup>
+</Project>

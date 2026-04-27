@@ -1,0 +1,22 @@
+$ErrorActionPreference = "Stop"
+$root = Split-Path -Parent $PSScriptRoot
+
+& (Join-Path $PSScriptRoot "build.ps1") -Configuration Release
+
+$exe = Join-Path $root "x64\Release\AegisStockBettingAI.exe"
+if (-not (Test-Path $exe)) {
+    throw "Release executable not found: $exe"
+}
+
+& $exe --self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "Self-test failed with exit code $LASTEXITCODE."
+}
+
+$p = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+Start-Sleep -Seconds 4
+if ($p.HasExited) {
+    throw "Smoke test failed: app exited early with code $($p.ExitCode)."
+}
+Stop-Process -Id $p.Id
+Write-Host "Self-test and smoke test passed."

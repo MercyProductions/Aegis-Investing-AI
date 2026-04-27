@@ -1,0 +1,55 @@
+# Visual Studio / MSBuild
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+ipch/
+Debug/
+Release/
+x64/
+x86/
+ARM/
+ARM64/
+build/
+out/
+
+# Build outputs
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.iobj
+*.ipdb
+*.tlog
+*.recipe
+*.log
+
+# Release packages generated locally
+dist/
+
+# Local runtime data and caches
+*.db
+*.sqlite
+*.sqlite3
+*.tsv
+*.jsonl
+diagnostics-export/
+history-cache/
+research-cache/
+sec-cache/
+reports/
+
+# Secrets and local overrides
+*.local.ini
+*.secrets.ini
+*.env
+.env*
+
+# OS noise
+Thumbs.db
+Desktop.ini
+.DS_Store
