@@ -15,21 +15,47 @@ namespace aegis
     {
         std::mutex g_diagnostic_mutex;
 
-        std::string ScrubTokenAfter(std::string value, const std::string& marker)
+        std::string ScrubTokenAfter(std::string value, const std::string& marker, const std::string& delimiters, bool skip_leading_separators = true)
         {
             std::string lowered = Lower(value);
             size_t pos = lowered.find(marker);
             while (pos != std::string::npos)
             {
-                const size_t value_start = pos + marker.size();
-                size_t end = value.find_first_of("& \t\r\n'\";)", value_start);
+                size_t value_start = pos + marker.size();
+                if (skip_leading_separators)
+                {
+                    while (value_start < value.size())
+                    {
+                        const char c = value[value_start];
+                        if (c != ' ' && c != '\t' && c != ':' && c != '=')
+                            break;
+                        ++value_start;
+                    }
+                }
+                size_t end = value.find_first_of(delimiters, value_start);
                 if (end == std::string::npos)
                     end = value.size();
-                value.replace(value_start, end - value_start, "REDACTED");
+                if (end > value_start)
+                    value.replace(value_start, end - value_start, "REDACTED");
                 lowered = Lower(value);
                 pos = lowered.find(marker, value_start + 8);
             }
             return value;
+        }
+
+        std::string ScrubQueryToken(std::string value, const std::string& marker)
+        {
+            return ScrubTokenAfter(std::move(value), marker, "& \t\r\n'\";,)<>");
+        }
+
+        std::string ScrubHeaderToken(std::string value, const std::string& marker)
+        {
+            return ScrubTokenAfter(std::move(value), marker, "\r\n");
+        }
+
+        std::string ScrubJsonToken(std::string value, const std::string& marker)
+        {
+            return ScrubTokenAfter(std::move(value), marker, "\"", false);
         }
 
         std::filesystem::path DiagnosticsJsonlPath()
@@ -78,14 +104,48 @@ namespace aegis
 
     std::string RedactSecrets(std::string value)
     {
-        value = ScrubTokenAfter(std::move(value), "apikey=");
-        value = ScrubTokenAfter(std::move(value), "api_key=");
-        value = ScrubTokenAfter(std::move(value), "password=");
-        value = ScrubTokenAfter(std::move(value), "authorization:");
-        value = ScrubTokenAfter(std::move(value), "cookie:");
-        value = ScrubTokenAfter(std::move(value), "set-cookie:");
-        value = ScrubTokenAfter(std::move(value), "\"password\":\"");
-        value = ScrubTokenAfter(std::move(value), "\"alpha_vantage_api_key\":\"");
+        for (const char* marker : {
+            "apikey=",
+            "api_key=",
+            "alpha_vantage_api_key=",
+            "access_token=",
+            "refresh_token=",
+            "id_token=",
+            "token=",
+            "password=",
+            "authorization=",
+            "cookie=",
+        })
+        {
+            value = ScrubQueryToken(std::move(value), marker);
+        }
+        for (const char* marker : {
+            "authorization:",
+            "proxy-authorization:",
+            "cookie:",
+            "set-cookie:",
+            "x-api-key:",
+            "api-key:",
+        })
+        {
+            value = ScrubHeaderToken(std::move(value), marker);
+        }
+        for (const char* marker : {
+            "\"password\":\"",
+            "\"alpha_vantage_api_key\":\"",
+            "\"api_key\":\"",
+            "\"apikey\":\"",
+            "\"access_token\":\"",
+            "\"refresh_token\":\"",
+            "\"id_token\":\"",
+            "\"token\":\"",
+            "\"authorization\":\"",
+            "\"cookie\":\"",
+        })
+        {
+            value = ScrubJsonToken(std::move(value), marker);
+        }
+        value = ScrubQueryToken(std::move(value), "bearer ");
         return value;
     }
 

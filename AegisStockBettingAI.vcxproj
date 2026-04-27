@@ -95,7 +95,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\Json.cpp" />
+    <ClCompile Include="src\Csv.cpp" />
+    <ClCompile Include="src\ImportValidation.cpp" />
     <ClCompile Include="src\Platform.cpp" />
+    <ClCompile Include="src\PositionSizing.cpp" />
+    <ClCompile Include="src\WorkflowValidation.cpp" />
     <ClCompile Include="src\Diagnostics.cpp" />
     <ClCompile Include="src\AlertEngine.cpp" />
     <ClCompile Include="src\AppSession.cpp" />
@@ -107,6 +111,7 @@
     <ClCompile Include="src\ProviderLayer.cpp" />
     <ClCompile Include="src\SelfTests.cpp" />
     <ClCompile Include="src\SettingsService.cpp" />
+    <ClCompile Include="src\SymbolRules.cpp" />
     <ClCompile Include="src\Main.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
     <ClCompile Include="imgui\imgui_draw.cpp" />
@@ -117,7 +122,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\Json.h" />
+    <ClInclude Include="src\Csv.h" />
+    <ClInclude Include="src\ImportValidation.h" />
     <ClInclude Include="src\Platform.h" />
+    <ClInclude Include="src\PositionSizing.h" />
+    <ClInclude Include="src\WorkflowValidation.h" />
     <ClInclude Include="src\Diagnostics.h" />
     <ClInclude Include="src\AlertEngine.h" />
     <ClInclude Include="src\AppSession.h" />
@@ -129,6 +138,7 @@
     <ClInclude Include="src\ProviderLayer.h" />
     <ClInclude Include="src\SelfTests.h" />
     <ClInclude Include="src\SettingsService.h" />
+    <ClInclude Include="src\SymbolRules.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="AegisStockBettingAI.config.ini" />

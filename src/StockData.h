@@ -2,6 +2,7 @@
 
 #include "Platform.h"
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -37,11 +38,15 @@ namespace aegis
         double pe_ratio = 0.0;
         double dividend_yield = 0.0;
         double beta = 1.0;
+        bool market_cap_estimated = false;
+        bool beta_estimated = false;
+        bool fundamentals_estimated = false;
         std::string latest_trading_day;
         std::string timestamp;
         std::string source;
         std::string status;
         std::string note;
+        std::string data_quality;
         bool live = false;
         std::vector<float> history;
     };
@@ -136,17 +141,26 @@ namespace aegis
     StockState BuildNativeStockState(const Config& config);
     AlphaValidationResult ValidateAlphaVantageKey(const std::string& api_key);
     std::vector<PortfolioHolding> LoadPortfolioHoldings();
+    std::vector<PortfolioHolding> LoadPortfolioHoldings(const std::filesystem::path& path);
     bool SavePortfolioHoldings(const std::vector<PortfolioHolding>& holdings);
+    bool SavePortfolioHoldings(const std::vector<PortfolioHolding>& holdings, const std::filesystem::path& path);
     std::vector<PriceAlert> LoadPriceAlerts();
+    std::vector<PriceAlert> LoadPriceAlerts(const std::filesystem::path& path);
     bool SavePriceAlerts(const std::vector<PriceAlert>& alerts);
+    bool SavePriceAlerts(const std::vector<PriceAlert>& alerts, const std::filesystem::path& path);
     std::vector<TradePlan> LoadTradePlans();
+    std::vector<TradePlan> LoadTradePlans(const std::filesystem::path& path);
     bool SaveTradePlans(const std::vector<TradePlan>& plans);
+    bool SaveTradePlans(const std::vector<TradePlan>& plans, const std::filesystem::path& path);
     std::vector<std::string> SplitWatchlist(const std::string& value);
     std::string JoinWatchlist(const std::vector<std::string>& symbols);
     std::vector<const StockQuote*> FilterQuotes(const StockState& state, const std::string& filter, const std::string& search);
     std::vector<int> FilterSignalIndexes(const StockState& state, const std::string& filter, const std::string& search);
     const StockQuote* FindQuote(const StockState& state, const std::string& symbol);
     const StockSignal* FindSignal(const StockState& state, const std::string& symbol);
+    int DataConfidencePenalty(const StockQuote& quote);
+    std::string DataQualityBadge(const StockQuote& quote);
+    std::vector<InfoItem> BuildQuoteDataQualityRows(const StockQuote& quote);
     std::string FormatCurrency(double value);
     std::string FormatCompactCurrency(double value);
     std::string FormatPercent(double value);

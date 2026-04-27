@@ -1,6 +1,8 @@
 #include "StockData.h"
 
+#include "Diagnostics.h"
 #include "Json.h"
+#include "SymbolRules.h"
 
 #include <algorithm>
 #include <array>
@@ -52,6 +54,23 @@ namespace aegis
         double ClampDouble(double value, double min_value, double max_value)
         {
             return std::max(min_value, std::min(max_value, value));
+        }
+
+        bool LooksProviderLimited(int http_status, const std::string& text)
+        {
+            if (http_status == 429)
+                return true;
+            const std::string lower = Lower(text);
+            return lower.find("rate limit") != std::string::npos ||
+                lower.find("api call frequency") != std::string::npos ||
+                lower.find("standard api call frequency") != std::string::npos ||
+                lower.find("premium endpoint") != std::string::npos ||
+                lower.find("thank you for using alpha vantage") != std::string::npos;
+        }
+
+        bool ContainsWord(const std::string& text, const std::string& word)
+        {
+            return Lower(text).find(Lower(word)) != std::string::npos;
         }
 
         double ParsePercent(std::string value)
@@ -219,11 +238,15 @@ namespace aegis
             quote.pe_ratio = 18.0 + SeedValue(symbol) * 44.0;
             quote.dividend_yield = (SeedValue(symbol) > 0.55 ? 0.4 + SeedValue(symbol) * 2.1 : 0.0);
             quote.beta = 0.75 + SeedValue(symbol) * 1.15;
+            quote.market_cap_estimated = true;
+            quote.beta_estimated = true;
+            quote.fundamentals_estimated = true;
             quote.latest_trading_day = "Demo";
             quote.timestamp = NowTimeLabel();
             quote.source = "Demo";
             quote.status = "Research";
-            quote.note = "Sample quote for layout, scoring, and workflow until a market-data key is saved.";
+            quote.note = "Sample quote for layout, scoring, and workflow until a market-data key is saved. Fundamentals and beta are estimated.";
+            quote.data_quality = "Demo quote / estimated metrics";
             quote.history = BuildHistory(quote.symbol, quote.price, quote.change_percent);
             return quote;
         }
@@ -262,6 +285,11 @@ namespace aegis
             quote.pe_ratio = 18.0 + SeedValue(quote.symbol) * 44.0;
             quote.dividend_yield = (SeedValue(quote.symbol) > 0.55 ? 0.4 + SeedValue(quote.symbol) * 2.1 : 0.0);
             quote.beta = 0.75 + SeedValue(quote.symbol) * 1.15;
+            quote.market_cap_estimated = true;
+            quote.beta_estimated = true;
+            quote.fundamentals_estimated = true;
+            quote.note = "Price, range, volume, and previous close are from Alpha Vantage. Market cap, P/E, dividend yield, and beta are estimated until a fundamentals provider syncs.";
+            quote.data_quality = "Live quote / estimated metrics";
             quote.history = BuildHistory(quote.symbol, quote.price > 0.0 ? quote.price : 100.0, quote.change_percent);
             return quote;
         }
@@ -315,7 +343,9 @@ namespace aegis
             signal.symbol = quote.symbol;
             signal.company = quote.name;
             signal.score = BuildScore(quote);
-            signal.confidence = ClampInt(signal.score + (quote.source == "Alpha Vantage" ? 3 : -5), 10, 96);
+            const int source_bonus = quote.source == "Alpha Vantage" && quote.live ? 5 : -3;
+            const int confidence_penalty = DataConfidencePenalty(quote);
+            signal.confidence = ClampInt(signal.score + source_bonus - confidence_penalty, 10, 96);
             signal.rating = RatingForScore(signal.score);
             signal.posture = signal.score >= config.min_conviction ? "Eligible watch" : "Below threshold";
             signal.horizon = signal.score >= 70 ? "2-8 weeks" : "1-4 weeks";
@@ -341,6 +371,7 @@ namespace aegis
                 {"Momentum", "", FormatPercent(quote.change_percent), std::to_string(signal.score), "Latest quote change compared with previous close.", "Price"},
                 {"Intraday range", "", FormatPercent(range), "", "A wide range raises execution and stop-placement risk.", "Risk"},
                 {"Liquidity", "", FormatVolume(quote.volume), "", "Higher volume improves confidence that prices are observable and tradable.", "Volume"},
+                {"Data confidence", "", std::to_string(signal.confidence) + "%", "-" + std::to_string(confidence_penalty), DataQualityBadge(quote) + ". " + quote.note, "Freshness"},
                 {"Risk budget", "", FormatCurrency(signal.position_budget), "", "Position sizing is capped by the configured paper portfolio controls.", "Sizing"}
             };
             return signal;
@@ -433,12 +464,15 @@ namespace aegis
 
             int positive = 0;
             int eligible = 0;
+            int estimated_metric_count = 0;
             double change_sum = 0.0;
             long long total_volume = 0;
             for (const StockQuote& quote : state.quotes)
             {
                 if (quote.change_percent >= 0.0)
                     ++positive;
+                if (quote.market_cap_estimated || quote.beta_estimated || quote.fundamentals_estimated)
+                    ++estimated_metric_count;
                 change_sum += quote.change_percent;
                 total_volume += quote.volume;
             }
@@ -488,6 +522,7 @@ namespace aegis
             state.rules = {
                 {"No auto trading", "", "Active", "", "The desktop tool never places orders by itself.", "Safety"},
                 {"Data freshness", "", state.source_badge, "", "Quotes are labeled by source and fallback status.", "Data"},
+                {"Estimated metrics", "", estimated_metric_count > 0 ? std::to_string(estimated_metric_count) : "None", "", estimated_metric_count > 0 ? "Some market cap, beta, valuation, or fundamental values are estimated and confidence is decayed accordingly." : "Loaded quote metrics are provider-backed where currently used.", "Data"},
                 {"Conviction floor", "", std::to_string(config.min_conviction), "", "Signals below this score remain research-only.", "Model"},
                 {"Position cap", "", FormatCurrency(config.max_position_amount), "", "Every idea is clipped by the configured max position.", "Risk"}
             };
@@ -516,6 +551,7 @@ namespace aegis
             state.research = {
                 {"Quote feed", "", state.source_badge, "", state.source_label, "Data"},
                 {"Market status", "", state.market_status, "", state.market_detail, "Venue"},
+                {"Data quality", "", estimated_metric_count > 0 ? "Mixed" : "Provider-backed", "", estimated_metric_count > 0 ? "Estimated fields are labeled and lower model confidence until a provider-backed value is available." : "No estimated quote metrics are flagged in the active board.", "Trust"},
                 {"Model posture", "", std::to_string(static_cast<int>(state.signals.size())) + " ideas", "", "Scores blend price change, range, liquidity, and configured risk limits.", "Research"},
                 {"Reminder", "", "Educational", "", "Outputs are research organization only, not investment advice or a promise of returns.", "Risk"}
             };
@@ -538,18 +574,13 @@ namespace aegis
     {
         std::vector<std::string> symbols;
         std::set<std::string> seen;
-        std::string token;
-        std::stringstream stream(value);
-        while (std::getline(stream, token, ','))
+        for (const std::string& token : SplitRawSymbolTokens(value))
         {
-            std::string symbol = Upper(Trim(token));
-            symbol.erase(std::remove_if(symbol.begin(), symbol.end(), [](unsigned char c) {
-                return std::isalnum(c) == 0 && c != '.' && c != '-';
-            }), symbol.end());
-            if (symbol.empty() || seen.find(symbol) != seen.end())
+            const SymbolValidationResult validated = ValidateTickerSymbol(token);
+            if (!validated.ok || seen.find(validated.symbol) != seen.end())
                 continue;
-            seen.insert(symbol);
-            symbols.push_back(symbol);
+            seen.insert(validated.symbol);
+            symbols.push_back(validated.symbol);
         }
         return symbols;
     }
@@ -557,11 +588,16 @@ namespace aegis
     std::string JoinWatchlist(const std::vector<std::string>& symbols)
     {
         std::ostringstream stream;
-        for (size_t i = 0; i < symbols.size(); ++i)
+        bool first = true;
+        for (const std::string& symbol : symbols)
         {
-            if (i > 0)
+            const std::string normalized = NormalizeTickerSymbol(symbol);
+            if (normalized.empty())
+                continue;
+            if (!first)
                 stream << ",";
-            stream << Upper(symbols[i]);
+            stream << normalized;
+            first = false;
         }
         return stream.str();
     }
@@ -623,6 +659,7 @@ namespace aegis
         {
             state.market_status = "Unknown";
             state.market_detail = status_response.error.empty() ? "Market status endpoint returned HTTP " + std::to_string(status_response.status_code) + "." : status_response.error;
+            AppendDiagnosticEvent({ "warning", "Alpha Vantage", "MARKET_STATUS", "", LooksProviderLimited(status_response.status_code, status_response.body + status_response.error) ? "rate-limit" : "fallback", state.market_detail, status_response.error, status_response.status_code, 0, false });
         }
 
         std::vector<std::string> symbols = SplitWatchlist(config.watchlist);
@@ -639,11 +676,13 @@ namespace aegis
             if (!response.error.empty())
             {
                 warnings.push_back(symbol + ": " + response.error);
+                AppendDiagnosticEvent({ "warning", "Alpha Vantage", "GLOBAL_QUOTE", symbol, "error", "Quote request failed.", response.error, response.status_code, 0, false });
                 continue;
             }
             if (response.status_code < 200 || response.status_code >= 300)
             {
                 warnings.push_back(symbol + ": HTTP " + std::to_string(response.status_code));
+                AppendDiagnosticEvent({ "warning", "Alpha Vantage", "GLOBAL_QUOTE", symbol, LooksProviderLimited(response.status_code, response.body) ? "rate-limit" : "http-error", "Quote request returned HTTP " + std::to_string(response.status_code) + ".", "", response.status_code, 0, false });
                 continue;
             }
 
@@ -651,12 +690,14 @@ namespace aegis
             if (!parsed.ok)
             {
                 warnings.push_back(symbol + ": quote parse failed");
+                AppendDiagnosticEvent({ "warning", "Alpha Vantage", "GLOBAL_QUOTE", symbol, "parse-error", "Quote JSON parse failed.", parsed.error, response.status_code, 0, false });
                 continue;
             }
             const std::string note = parsed.value["Note"].AsString(parsed.value["Information"].AsString());
             if (!note.empty())
             {
                 warnings.push_back(symbol + ": " + note);
+                AppendDiagnosticEvent({ "warning", "Alpha Vantage", "GLOBAL_QUOTE", symbol, LooksProviderLimited(response.status_code, note) ? "rate-limit" : "provider-note", "Quote provider returned a notice.", note, response.status_code, 0, false });
                 break;
             }
 
@@ -743,8 +784,13 @@ namespace aegis
 
     std::vector<PortfolioHolding> LoadPortfolioHoldings()
     {
+        return LoadPortfolioHoldings(HoldingsFile());
+    }
+
+    std::vector<PortfolioHolding> LoadPortfolioHoldings(const std::filesystem::path& path)
+    {
         std::vector<PortfolioHolding> holdings;
-        std::ifstream file(HoldingsFile());
+        std::ifstream file(path);
         if (!file)
             return holdings;
 
@@ -778,9 +824,15 @@ namespace aegis
 
     bool SavePortfolioHoldings(const std::vector<PortfolioHolding>& holdings)
     {
+        return SavePortfolioHoldings(holdings, HoldingsFile());
+    }
+
+    bool SavePortfolioHoldings(const std::vector<PortfolioHolding>& holdings, const std::filesystem::path& path)
+    {
         std::error_code ec;
-        std::filesystem::create_directories(AppDataDirectory(), ec);
-        std::ofstream file(HoldingsFile(), std::ios::trunc);
+        if (path.has_parent_path())
+            std::filesystem::create_directories(path.parent_path(), ec);
+        std::ofstream file(path, std::ios::trunc);
         if (!file)
             return false;
 
@@ -798,8 +850,13 @@ namespace aegis
 
     std::vector<PriceAlert> LoadPriceAlerts()
     {
+        return LoadPriceAlerts(AlertsFile());
+    }
+
+    std::vector<PriceAlert> LoadPriceAlerts(const std::filesystem::path& path)
+    {
         std::vector<PriceAlert> alerts;
-        std::ifstream file(AlertsFile());
+        std::ifstream file(path);
         if (!file)
             return alerts;
 
@@ -836,9 +893,15 @@ namespace aegis
 
     bool SavePriceAlerts(const std::vector<PriceAlert>& alerts)
     {
+        return SavePriceAlerts(alerts, AlertsFile());
+    }
+
+    bool SavePriceAlerts(const std::vector<PriceAlert>& alerts, const std::filesystem::path& path)
+    {
         std::error_code ec;
-        std::filesystem::create_directories(AppDataDirectory(), ec);
-        std::ofstream file(AlertsFile(), std::ios::trunc);
+        if (path.has_parent_path())
+            std::filesystem::create_directories(path.parent_path(), ec);
+        std::ofstream file(path, std::ios::trunc);
         if (!file)
             return false;
 
@@ -857,8 +920,13 @@ namespace aegis
 
     std::vector<TradePlan> LoadTradePlans()
     {
+        return LoadTradePlans(TradePlansFile());
+    }
+
+    std::vector<TradePlan> LoadTradePlans(const std::filesystem::path& path)
+    {
         std::vector<TradePlan> plans;
-        std::ifstream file(TradePlansFile());
+        std::ifstream file(path);
         if (!file)
             return plans;
 
@@ -907,9 +975,15 @@ namespace aegis
 
     bool SaveTradePlans(const std::vector<TradePlan>& plans)
     {
+        return SaveTradePlans(plans, TradePlansFile());
+    }
+
+    bool SaveTradePlans(const std::vector<TradePlan>& plans, const std::filesystem::path& path)
+    {
         std::error_code ec;
-        std::filesystem::create_directories(AppDataDirectory(), ec);
-        std::ofstream file(TradePlansFile(), std::ios::trunc);
+        if (path.has_parent_path())
+            std::filesystem::create_directories(path.parent_path(), ec);
+        std::ofstream file(path, std::ios::trunc);
         if (!file)
             return false;
 
@@ -997,6 +1071,46 @@ namespace aegis
                 return &signal;
         }
         return state.signals.empty() ? nullptr : &state.signals.front();
+    }
+
+    int DataConfidencePenalty(const StockQuote& quote)
+    {
+        int penalty = 0;
+        const std::string quality_text = quote.source + " " + quote.status + " " + quote.note + " " + quote.data_quality;
+        if (!quote.live)
+            penalty += 8;
+        if (quote.market_cap_estimated || quote.beta_estimated || quote.fundamentals_estimated)
+            penalty += 6;
+        if (ContainsWord(quality_text, "demo") || ContainsWord(quality_text, "sample"))
+            penalty += 5;
+        if (ContainsWord(quality_text, "fallback") || ContainsWord(quality_text, "stale") || ContainsWord(quality_text, "cache"))
+            penalty += 6;
+        return ClampInt(penalty, 0, 25);
+    }
+
+    std::string DataQualityBadge(const StockQuote& quote)
+    {
+        const std::string quality_text = quote.source + " " + quote.status + " " + quote.note + " " + quote.data_quality;
+        if (ContainsWord(quality_text, "stale") || ContainsWord(quality_text, "cache") || ContainsWord(quality_text, "fallback"))
+            return "Cache/stale fallback";
+        if (ContainsWord(quality_text, "demo") || ContainsWord(quality_text, "sample"))
+            return "Demo / estimated";
+        if (quote.market_cap_estimated || quote.beta_estimated || quote.fundamentals_estimated)
+            return quote.live ? "Live quote / estimated metrics" : "Estimated metrics";
+        return quote.live ? "Live provider-backed" : "Unverified";
+    }
+
+    std::vector<InfoItem> BuildQuoteDataQualityRows(const StockQuote& quote)
+    {
+        const int penalty = DataConfidencePenalty(quote);
+        const std::string badge = DataQualityBadge(quote);
+        return {
+            { "Quote feed", quote.live ? "Live" : "Fallback", quote.source.empty() ? "Unknown" : quote.source, "", quote.timestamp.empty() ? "No fetch timestamp is available." : "Fetched or generated at " + quote.timestamp + ".", "quality", quote.live ? "Ready" : "Review", quote.source, quote.timestamp },
+            { "Price/volume", quote.live ? "Provider-backed" : "Demo/cache", quote.price > 0.0 ? FormatCurrency(quote.price) : "Unavailable", "", quote.live ? "Price, range, previous close, and volume came from the quote feed." : "Price data is not from a live provider in this board.", "quality", quote.live ? "Ready" : "Review", quote.source, quote.timestamp },
+            { "Fundamentals", quote.fundamentals_estimated ? "Estimated" : "Provider-backed", quote.fundamentals_estimated ? "Estimate" : "Reported", "", quote.fundamentals_estimated ? "Market cap, valuation, dividend yield, or company fundamentals need a fundamentals provider before they should drive decisions." : "Fundamental metrics are marked as provider-backed.", "quality", quote.fundamentals_estimated ? "Review" : "Ready", quote.source, quote.timestamp },
+            { "Risk beta", quote.beta_estimated ? "Estimated" : "Provider-backed", quote.beta_estimated ? "Estimate" : "Reported", "", quote.beta_estimated ? "Beta and beta-driven portfolio risk are confidence-adjusted until historical/provider beta is available." : "Beta is not flagged as estimated.", "quality", quote.beta_estimated ? "Review" : "Ready", quote.source, quote.timestamp },
+            { "Confidence decay", penalty > 0 ? "Applied" : "None", penalty > 0 ? "-" + std::to_string(penalty) : "0", "", badge + ". " + (quote.note.empty() ? "No provider limitation note was supplied." : quote.note), "quality", penalty > 0 ? "Review" : "Ready", quote.source, quote.timestamp }
+        };
     }
 
     std::string FormatCurrency(double value)

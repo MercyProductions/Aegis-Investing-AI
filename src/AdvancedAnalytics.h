@@ -17,6 +17,13 @@ namespace aegis
         long long volume = 0;
     };
 
+    enum class CandleAggregation
+    {
+        Daily = 0,
+        Weekly = 1,
+        Monthly = 2
+    };
+
     struct IndicatorSnapshot
     {
         double sma20 = 0.0;
@@ -212,12 +219,17 @@ namespace aegis
     };
 
     std::vector<Candle> BuildSyntheticCandles(const StockQuote& quote, int days);
+    CandleAggregation NormalizeCandleAggregation(int value);
+    const char* CandleAggregationName(CandleAggregation aggregation);
+    std::vector<Candle> AggregateCandles(const std::vector<Candle>& candles, CandleAggregation aggregation);
     HistoricalCandlesResult LoadHistoricalCandles(const Config& config, const StockQuote& quote, int days);
     ResearchBundleResult LoadResearchBundle(const Config& config, const StockQuote& quote);
     IndicatorSnapshot BuildIndicators(const std::vector<Candle>& candles, const StockQuote* spy, const StockQuote* qqq);
     BacktestResult RunSignalBacktest(const std::vector<Candle>& candles, const std::string& preset);
     FundamentalSnapshot BuildFundamentals(const StockQuote& quote);
     std::vector<FilingItem> BuildFilings(const std::string& symbol);
+    std::vector<FilingItem> ParseSecSubmissionsFilings(const std::string& json_body, const std::string& symbol, const std::string& cik);
+    std::string BuildRiskFactorChangeSummary(const std::string& previous_text, const std::string& current_text);
     std::vector<NewsItem> BuildNews(const std::string& symbol);
     std::vector<EarningsItem> BuildEarnings(const std::string& symbol);
     OptionSnapshot BuildOptionSnapshot(const StockQuote& quote);

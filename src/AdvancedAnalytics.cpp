@@ -1,17 +1,23 @@
 #include "AdvancedAnalytics.h"
 
+#include "Diagnostics.h"
 #include "Json.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cctype>
+#include <ctime>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <mutex>
 #include <numeric>
+#include <set>
 #include <sstream>
+#include <thread>
 
 namespace aegis
 {
@@ -31,6 +37,38 @@ namespace aegis
         double Clamp(double value, double low, double high)
         {
             return std::max(low, std::min(high, value));
+        }
+
+        bool LooksProviderLimited(int http_status, const std::string& text)
+        {
+            if (http_status == 429)
+                return true;
+            const std::string lower = Lower(text);
+            return lower.find("rate limit") != std::string::npos ||
+                lower.find("api call frequency") != std::string::npos ||
+                lower.find("standard api call frequency") != std::string::npos ||
+                lower.find("premium endpoint") != std::string::npos ||
+                lower.find("thank you for using alpha vantage") != std::string::npos;
+        }
+
+        void WaitForSecThrottle()
+        {
+            static std::mutex throttle_mutex;
+            static std::chrono::steady_clock::time_point next_allowed = std::chrono::steady_clock::now();
+            constexpr std::chrono::milliseconds min_interval(120);
+
+            std::unique_lock<std::mutex> lock(throttle_mutex);
+            const auto now = std::chrono::steady_clock::now();
+            if (now < next_allowed)
+            {
+                const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(next_allowed - now);
+                if (wait.count() > 0)
+                {
+                    std::this_thread::sleep_for(wait);
+                    AppendDiagnosticEvent({ "info", "SEC EDGAR", "throttle", "", "wait", "SEC request paced to keep EDGAR access polite.", "", 0, static_cast<long long>(wait.count()), false });
+                }
+            }
+            next_allowed = std::chrono::steady_clock::now() + min_interval;
         }
 
         double Average(const std::vector<double>& values, size_t start, size_t count)
@@ -169,6 +207,51 @@ namespace aegis
         std::string DemoDate(int index_from_now)
         {
             return "T-" + std::to_string(index_from_now);
+        }
+
+        bool ParseIsoDate(const std::string& date, int& year, int& month, int& day)
+        {
+            if (date.size() < 10 || date[4] != '-' || date[7] != '-')
+                return false;
+            try
+            {
+                year = std::stoi(date.substr(0, 4));
+                month = std::stoi(date.substr(5, 2));
+                day = std::stoi(date.substr(8, 2));
+                return year >= 1900 && month >= 1 && month <= 12 && day >= 1 && day <= 31;
+            }
+            catch (...)
+            {
+                return false;
+            }
+        }
+
+        int DayOfYear(int year, int month, int day)
+        {
+            std::tm calendar{};
+            calendar.tm_year = year - 1900;
+            calendar.tm_mon = month - 1;
+            calendar.tm_mday = day;
+            calendar.tm_hour = 12;
+            std::mktime(&calendar);
+            return calendar.tm_yday;
+        }
+
+        std::string CandleAggregationKey(const Candle& candle, CandleAggregation aggregation, size_t index)
+        {
+            int year = 0;
+            int month = 0;
+            int day = 0;
+            if (ParseIsoDate(candle.date, year, month, day))
+            {
+                if (aggregation == CandleAggregation::Monthly)
+                    return candle.date.substr(0, 7);
+                const int week = DayOfYear(year, month, day) / 7;
+                return std::to_string(year) + "-W" + std::to_string(week);
+            }
+
+            const size_t synthetic_period = aggregation == CandleAggregation::Monthly ? 21 : 5;
+            return std::to_string(index / synthetic_period);
         }
 
         std::string ConfiguredAlphaKey(const Config& config)
@@ -596,48 +679,14 @@ namespace aegis
                 return {};
 
             const std::string url = "https://data.sec.gov/submissions/CIK" + cik + ".json";
+            WaitForSecThrottle();
             const HttpResponse response = HttpGet(url);
             if (!response.error.empty() || response.status_code < 200 || response.status_code >= 300)
-                return {};
-            const JsonParseResult parsed = ParseJson(response.body);
-            if (!parsed.ok)
-                return {};
-
-            const JsonValue& recent = parsed.value["filings"]["recent"];
-            const JsonValue& forms = recent["form"];
-            const JsonValue& dates = recent["filingDate"];
-            const JsonValue& accession_numbers = recent["accessionNumber"];
-            const JsonValue& primary_docs = recent["primaryDocument"];
-            if (!forms.IsArray() || !dates.IsArray() || !accession_numbers.IsArray() || !primary_docs.IsArray())
-                return {};
-
-            std::vector<FilingItem> filings;
-            const size_t count = std::min({ forms.array_value.size(), dates.array_value.size(), accession_numbers.array_value.size(), primary_docs.array_value.size() });
-            for (size_t i = 0; i < count; ++i)
             {
-                const std::string form = forms.array_value[i].AsString();
-                const std::string upper_form = Upper(form);
-                const bool keep = upper_form.find("10-K") == 0 || upper_form.find("10-Q") == 0 || upper_form.find("8-K") == 0 || upper_form == "4" || upper_form == "3" || upper_form == "5";
-                if (!keep)
-                    continue;
-
-                const std::string accession = accession_numbers.array_value[i].AsString();
-                std::string accession_dir = accession;
-                accession_dir.erase(std::remove(accession_dir.begin(), accession_dir.end(), '-'), accession_dir.end());
-                const std::string primary_doc = primary_docs.array_value[i].AsString();
-
-                FilingItem item;
-                item.form = form;
-                item.date = dates.array_value[i].AsString();
-                item.title = symbol + " " + form + " filing";
-                item.url = "https://www.sec.gov/Archives/edgar/data/" + UnpaddedCik(cik) + "/" + accession_dir + "/" + primary_doc;
-                item.summary = FilingSummaryForForm(form);
-                item.risk_change = FilingRiskReadForForm(form);
-                filings.push_back(std::move(item));
-                if (filings.size() >= 12)
-                    break;
+                AppendDiagnosticEvent({ "warning", "SEC EDGAR", "submissions", symbol, response.status_code == 429 ? "rate-limit" : "fallback", "SEC submissions request failed; using filing fallback if available.", response.error, response.status_code, 0, false });
+                return {};
             }
-            return filings;
+            return ParseSecSubmissionsFilings(response.body, symbol, cik);
         }
     }
 
@@ -676,6 +725,66 @@ namespace aegis
         candles.back().low = quote.low > 0.0 ? quote.low : std::min(candles.back().open, candles.back().close) * 0.99;
         candles.back().volume = quote.volume > 0 ? quote.volume : candles.back().volume;
         return candles;
+    }
+
+    CandleAggregation NormalizeCandleAggregation(int value)
+    {
+        if (value == static_cast<int>(CandleAggregation::Weekly))
+            return CandleAggregation::Weekly;
+        if (value == static_cast<int>(CandleAggregation::Monthly))
+            return CandleAggregation::Monthly;
+        return CandleAggregation::Daily;
+    }
+
+    const char* CandleAggregationName(CandleAggregation aggregation)
+    {
+        switch (aggregation)
+        {
+        case CandleAggregation::Weekly:
+            return "Weekly";
+        case CandleAggregation::Monthly:
+            return "Monthly";
+        case CandleAggregation::Daily:
+        default:
+            return "Daily";
+        }
+    }
+
+    std::vector<Candle> AggregateCandles(const std::vector<Candle>& candles, CandleAggregation aggregation)
+    {
+        if (aggregation == CandleAggregation::Daily || candles.empty())
+            return candles;
+
+        std::vector<Candle> aggregated;
+        aggregated.reserve(candles.size());
+        Candle current;
+        std::string current_key;
+        bool has_current = false;
+
+        for (size_t i = 0; i < candles.size(); ++i)
+        {
+            const Candle& candle = candles[i];
+            const std::string key = CandleAggregationKey(candle, aggregation, i);
+            if (!has_current || key != current_key)
+            {
+                if (has_current)
+                    aggregated.push_back(current);
+                current = candle;
+                current_key = key;
+                has_current = true;
+                continue;
+            }
+
+            current.high = std::max(current.high, candle.high);
+            current.low = current.low <= 0.0 ? candle.low : std::min(current.low, candle.low);
+            current.close = candle.close;
+            current.volume += candle.volume;
+            current.date = candle.date;
+        }
+
+        if (has_current)
+            aggregated.push_back(current);
+        return aggregated;
     }
 
     HistoricalCandlesResult LoadHistoricalCandles(const Config& config, const StockQuote& quote, int days)
@@ -727,6 +836,7 @@ namespace aegis
                 ? symbol + " history request returned HTTP " + std::to_string(response.status_code) + "; using fallback candles."
                 : symbol + " history request failed: " + response.error + "; using fallback candles.";
             result.fallback_reason = result.status;
+            AppendDiagnosticEvent({ "warning", "Alpha Vantage", "TIME_SERIES_DAILY", symbol, LooksProviderLimited(response.status_code, response.body + response.error) ? "rate-limit" : "fallback", result.status, response.error, response.status_code, 0, result.cached });
             AppendDiagnosticLine("history " + symbol + " " + result.status);
             return result;
         }
@@ -741,6 +851,7 @@ namespace aegis
             result.cache_age_label = result.cached ? "parse fallback cache" : "parse fallback synthetic";
             result.status = symbol + " history parse failed; using fallback candles.";
             result.fallback_reason = "Alpha Vantage JSON parse failed: " + parsed.error;
+            AppendDiagnosticEvent({ "warning", "Alpha Vantage", "TIME_SERIES_DAILY", symbol, "parse-error", result.status, parsed.error, response.status_code, 0, result.cached });
             AppendDiagnosticLine("history " + symbol + " parse failed " + parsed.error);
             return result;
         }
@@ -758,6 +869,7 @@ namespace aegis
                 ? symbol + " history limited by provider: " + note
                 : symbol + " history returned no daily candles; using fallback candles.";
             result.fallback_reason = result.status;
+            AppendDiagnosticEvent({ "warning", "Alpha Vantage", "TIME_SERIES_DAILY", symbol, LooksProviderLimited(response.status_code, note) ? "rate-limit" : "fallback", result.status, note, response.status_code, 0, result.cached });
             AppendDiagnosticLine("history " + symbol + " " + result.status);
             return result;
         }
@@ -832,23 +944,27 @@ namespace aegis
             if (!response.error.empty())
             {
                 warnings.push_back(endpoint + ": " + response.error);
+                AppendDiagnosticEvent({ "warning", "Alpha Vantage", endpoint, symbol, "error", endpoint + " request failed.", response.error, response.status_code, 0, cached.ok });
                 return false;
             }
             if (response.status_code < 200 || response.status_code >= 300)
             {
                 warnings.push_back(endpoint + ": HTTP " + std::to_string(response.status_code));
+                AppendDiagnosticEvent({ "warning", "Alpha Vantage", endpoint, symbol, LooksProviderLimited(response.status_code, response.body) ? "rate-limit" : "http-error", endpoint + " returned HTTP " + std::to_string(response.status_code) + ".", "", response.status_code, 0, cached.ok });
                 return false;
             }
             const JsonParseResult parsed = ParseJson(response.body);
             if (!parsed.ok)
             {
                 warnings.push_back(endpoint + ": parse failed");
+                AppendDiagnosticEvent({ "warning", "Alpha Vantage", endpoint, symbol, "parse-error", endpoint + " JSON parse failed.", parsed.error, response.status_code, 0, cached.ok });
                 return false;
             }
             const std::string note = ProviderNote(parsed.value);
             if (!note.empty())
             {
                 warnings.push_back(endpoint + ": " + note);
+                AppendDiagnosticEvent({ "warning", "Alpha Vantage", endpoint, symbol, LooksProviderLimited(response.status_code, note) ? "rate-limit" : "provider-note", endpoint + " returned provider notice.", note, response.status_code, 0, cached.ok });
                 return false;
             }
             out = parsed.value;
@@ -1093,8 +1209,126 @@ namespace aegis
         f.pe = quote.pe_ratio;
         f.peg = 0.8 + seed * 2.3;
         f.dividend_yield = quote.dividend_yield;
-        f.summary = quote.symbol + " fundamental card is provider-ready. Connect Alpha Vantage fundamentals, SEC companyfacts, or another provider for reported values.";
+        f.summary = quote.symbol + " fundamental card is estimated until Alpha Vantage fundamentals, SEC companyfacts, or another provider supplies reported values.";
         return f;
+    }
+
+    std::vector<FilingItem> ParseSecSubmissionsFilings(const std::string& json_body, const std::string& symbol, const std::string& cik)
+    {
+        const JsonParseResult parsed = ParseJson(json_body);
+        if (!parsed.ok)
+            return {};
+
+        const JsonValue& recent = parsed.value["filings"]["recent"];
+        const JsonValue& forms = recent["form"];
+        const JsonValue& dates = recent["filingDate"];
+        const JsonValue& accession_numbers = recent["accessionNumber"];
+        const JsonValue& primary_docs = recent["primaryDocument"];
+        if (!forms.IsArray() || !dates.IsArray() || !accession_numbers.IsArray() || !primary_docs.IsArray())
+            return {};
+
+        std::vector<FilingItem> filings;
+        const size_t count = std::min({ forms.array_value.size(), dates.array_value.size(), accession_numbers.array_value.size(), primary_docs.array_value.size() });
+        for (size_t i = 0; i < count; ++i)
+        {
+            const std::string form = forms.array_value[i].AsString();
+            const std::string upper_form = Upper(form);
+            const bool keep = upper_form.find("10-K") == 0 || upper_form.find("10-Q") == 0 || upper_form.find("8-K") == 0 || upper_form == "4" || upper_form == "3" || upper_form == "5";
+            if (!keep)
+                continue;
+
+            const std::string accession = accession_numbers.array_value[i].AsString();
+            std::string accession_dir = accession;
+            accession_dir.erase(std::remove(accession_dir.begin(), accession_dir.end(), '-'), accession_dir.end());
+            const std::string primary_doc = primary_docs.array_value[i].AsString();
+
+            FilingItem item;
+            item.form = form;
+            item.date = dates.array_value[i].AsString();
+            item.title = Upper(symbol) + " " + form + " filing";
+            item.url = "https://www.sec.gov/Archives/edgar/data/" + UnpaddedCik(cik) + "/" + accession_dir + "/" + primary_doc;
+            item.summary = FilingSummaryForForm(form);
+            item.risk_change = FilingRiskReadForForm(form);
+            filings.push_back(std::move(item));
+            if (filings.size() >= 12)
+                break;
+        }
+        return filings;
+    }
+
+    std::string BuildRiskFactorChangeSummary(const std::string& previous_text, const std::string& current_text)
+    {
+        const auto keywords = [](const std::string& text) {
+            std::set<std::string> out;
+            std::string word;
+            for (const unsigned char c : text)
+            {
+                if (std::isalnum(c))
+                {
+                    word.push_back(static_cast<char>(std::tolower(c)));
+                }
+                else
+                {
+                    if (word.size() >= 5)
+                        out.insert(word);
+                    word.clear();
+                }
+            }
+            if (word.size() >= 5)
+                out.insert(word);
+            return out;
+        };
+
+        const std::set<std::string> previous = keywords(previous_text);
+        const std::set<std::string> current = keywords(current_text);
+        std::vector<std::string> added;
+        std::vector<std::string> removed;
+        for (const std::string& word : current)
+        {
+            if (previous.find(word) == previous.end())
+                added.push_back(word);
+        }
+        for (const std::string& word : previous)
+        {
+            if (current.find(word) == current.end())
+                removed.push_back(word);
+        }
+
+        if (previous.empty() && current.empty())
+            return "No risk-factor text available for comparison.";
+        if (added.empty() && removed.empty())
+            return "Risk factors appear unchanged.";
+
+        std::ostringstream stream;
+        stream << "Risk-factor language changed";
+        if (current_text.size() > previous_text.size() * 12 / 10)
+            stream << " and expanded materially";
+        else if (current_text.size() * 12 / 10 < previous_text.size())
+            stream << " and shortened materially";
+        stream << ".";
+        if (!added.empty())
+        {
+            stream << " Added terms: ";
+            for (size_t i = 0; i < std::min<size_t>(3, added.size()); ++i)
+            {
+                if (i > 0)
+                    stream << ", ";
+                stream << added[i];
+            }
+            stream << ".";
+        }
+        if (!removed.empty())
+        {
+            stream << " Removed terms: ";
+            for (size_t i = 0; i < std::min<size_t>(3, removed.size()); ++i)
+            {
+                if (i > 0)
+                    stream << ", ";
+                stream << removed[i];
+            }
+            stream << ".";
+        }
+        return stream.str();
     }
 
     std::vector<FilingItem> BuildFilings(const std::string& symbol)
@@ -1260,8 +1494,8 @@ namespace aegis
         summary.concentration = value > 0.0 ? (largest / value) * 100.0 : 0.0;
         summary.estimated_drawdown = -(8.0 + summary.beta_exposure * 9.0 + std::max(0.0, summary.concentration - 20.0) * 0.25);
         summary.rows = {
-            {"Beta exposure", "", std::to_string(static_cast<int>(summary.beta_exposure * 100.0) / 100.0), "", "Weighted beta estimate across saved holdings."},
-            {"Estimated drawdown", "", FormatPercent(summary.estimated_drawdown), "", "Scenario estimate based on beta and concentration."},
+            {"Beta exposure", "Estimated", std::to_string(static_cast<int>(summary.beta_exposure * 100.0) / 100.0), "", "Weighted beta estimate across saved holdings until historical-return beta fully replaces provider/demo beta."},
+            {"Estimated drawdown", "Estimated", FormatPercent(summary.estimated_drawdown), "", "Scenario estimate based on beta and concentration."},
             {"Cash drag", "", FormatPercent(summary.cash_drag), "", "Cash as a percent of paper portfolio value plus cash."},
             {"Concentration", "", FormatPercent(summary.concentration), "", "Largest saved holding as a percent of marked holdings."}
         };

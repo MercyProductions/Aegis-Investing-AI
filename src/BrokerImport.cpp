@@ -1,5 +1,8 @@
 #include "BrokerImport.h"
 
+#include "Csv.h"
+#include "SymbolRules.h"
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -21,52 +24,6 @@ namespace aegis
                     out.push_back(static_cast<char>(c));
             }
             return out;
-        }
-
-        std::string NormalizeSymbol(std::string value)
-        {
-            value = Upper(Trim(value));
-            const size_t space = value.find(' ');
-            if (space != std::string::npos)
-                value = value.substr(0, space);
-            value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char c) {
-                return std::isalnum(c) == 0 && c != '.' && c != '-';
-            }), value.end());
-            return value;
-        }
-
-        std::vector<std::string> SplitCsvLine(const std::string& line)
-        {
-            std::vector<std::string> cells;
-            std::string cell;
-            bool quoted = false;
-            for (size_t i = 0; i < line.size(); ++i)
-            {
-                const char c = line[i];
-                if (c == '"')
-                {
-                    if (quoted && i + 1 < line.size() && line[i + 1] == '"')
-                    {
-                        cell.push_back('"');
-                        ++i;
-                    }
-                    else
-                    {
-                        quoted = !quoted;
-                    }
-                }
-                else if (c == ',' && !quoted)
-                {
-                    cells.push_back(cell);
-                    cell.clear();
-                }
-                else
-                {
-                    cell.push_back(c);
-                }
-            }
-            cells.push_back(cell);
-            return cells;
         }
 
         double ParseMoney(std::string value)
@@ -157,7 +114,8 @@ namespace aegis
                 row.profile = profile.name;
                 row.source_file = profile.file_name;
                 row.row_number = row_number;
-                row.symbol = NormalizeSymbol(Cell(cells, symbol_col));
+                const SymbolValidationResult symbol = ValidateTickerSymbol(Cell(cells, symbol_col));
+                row.symbol = symbol.symbol;
                 row.shares = ParseMoney(Cell(cells, shares_col));
                 row.average_cost = ParseMoney(Cell(cells, avg_cost_col));
                 const double total_cost = ParseMoney(Cell(cells, total_cost_col));
@@ -176,10 +134,10 @@ namespace aegis
                     row.status = "Skipped";
                     row.error = "Unsupported asset type: " + type;
                 }
-                else if (row.symbol.empty())
+                else if (!symbol.ok)
                 {
                     row.status = "Error";
-                    row.error = "Missing symbol.";
+                    row.error = symbol.reason;
                 }
                 else if (row.shares <= 0.0)
                 {

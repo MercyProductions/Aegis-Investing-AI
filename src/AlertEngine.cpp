@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <sstream>
 
 namespace aegis
@@ -109,8 +111,13 @@ namespace aegis
 
     std::vector<AlertEvent> LoadAlertEvents()
     {
+        return LoadAlertEvents(AlertEventsFile());
+    }
+
+    std::vector<AlertEvent> LoadAlertEvents(const std::filesystem::path& path)
+    {
         std::vector<AlertEvent> events;
-        std::ifstream file(AlertEventsFile());
+        std::ifstream file(path);
         if (!file)
             return events;
         std::string line;
@@ -142,9 +149,15 @@ namespace aegis
 
     bool SaveAlertEvents(const std::vector<AlertEvent>& events)
     {
+        return SaveAlertEvents(events, AlertEventsFile());
+    }
+
+    bool SaveAlertEvents(const std::vector<AlertEvent>& events, const std::filesystem::path& path)
+    {
         std::error_code ec;
-        std::filesystem::create_directories(AppDataDirectory(), ec);
-        std::ofstream file(AlertEventsFile(), std::ios::trunc);
+        if (path.has_parent_path())
+            std::filesystem::create_directories(path.parent_path(), ec);
+        std::ofstream file(path, std::ios::trunc);
         if (!file)
             return false;
         file << "id\talert_key\tsymbol\tdirection\ttrigger_price\tobserved_price\ttriggered_at\tsource\tnote\tacknowledged\tacknowledged_at\tsnoozed_until_epoch\n";
@@ -166,9 +179,79 @@ namespace aegis
         return true;
     }
 
+    bool IsPriceAlertTriggered(const PriceAlert& alert, const StockQuote& quote)
+    {
+        if (!alert.enabled || quote.price <= 0.0)
+            return false;
+        return alert.above ? quote.price >= alert.trigger_price : quote.price <= alert.trigger_price;
+    }
+
     bool IsAlertEventSuppressed(const PriceAlert& alert, const std::vector<AlertEvent>& events)
     {
         return HasOpenEventForKey(AlertKey(alert), events);
+    }
+
+    AlertEvaluationResult EvaluatePriceAlerts(const std::vector<PriceAlert>& alerts, const std::vector<StockQuote>& quotes, const std::vector<AlertEvent>& events, const std::string& source_label)
+    {
+        AlertEvaluationResult result;
+        result.source = source_label;
+        std::map<std::string, const StockQuote*> quote_by_symbol;
+        for (const StockQuote& quote : quotes)
+        {
+            if (!quote.symbol.empty())
+                quote_by_symbol[Upper(Trim(quote.symbol))] = &quote;
+        }
+
+        for (const PriceAlert& alert : alerts)
+        {
+            if (!alert.enabled)
+                continue;
+            ++result.checked;
+            const std::string symbol = Upper(Trim(alert.symbol));
+            const auto quote_it = quote_by_symbol.find(symbol);
+            if (quote_it == quote_by_symbol.end() || quote_it->second == nullptr || quote_it->second->price <= 0.0)
+            {
+                ++result.missing_quotes;
+                continue;
+            }
+
+            const StockQuote& quote = *quote_it->second;
+            if (!IsPriceAlertTriggered(alert, quote))
+                continue;
+
+            ++result.triggered;
+            const bool suppressed = IsAlertEventSuppressed(alert, events);
+            if (suppressed)
+                ++result.suppressed;
+
+            const std::string direction = alert.above ? "above" : "below";
+            InfoItem row;
+            row.name = symbol;
+            row.label = suppressed ? "Custom price alert active" : "Custom price alert triggered";
+            row.value = FormatCurrency(quote.price);
+            row.detail = symbol + " is " + direction + " " + FormatCurrency(alert.trigger_price) + ". " + (suppressed ? "Existing event is open/snoozed. " : "New alert event recorded. ") + alert.note;
+            row.tag = "Custom";
+            row.state = quote.source.empty() ? source_label : quote.source;
+            row.source = row.state;
+            row.time = NowStamp();
+            result.rows.push_back(std::move(row));
+
+            if (!suppressed)
+                result.new_events.push_back(MakeAlertEvent(alert, quote));
+        }
+
+        std::ostringstream summary;
+        summary << "Alert monitor checked " << result.checked << " enabled alert(s), "
+                << result.triggered << " triggered, "
+                << result.new_events.size() << " new, "
+                << result.suppressed << " already open/snoozed";
+        if (result.missing_quotes > 0)
+            summary << ", " << result.missing_quotes << " missing quotes";
+        if (!result.source.empty())
+            summary << " using " << result.source;
+        summary << ".";
+        result.summary = summary.str();
+        return result;
     }
 
     AlertEvent MakeAlertEvent(const PriceAlert& alert, const StockQuote& quote)
@@ -199,6 +282,78 @@ namespace aegis
         event.acknowledged = false;
         event.snoozed_until_epoch = NowEpoch() + static_cast<long long>(std::max(1, minutes)) * 60;
         AppendAuditEvent({ "local", "alert_snoozed", event.symbol, std::to_string(std::max(1, minutes)) + " minutes" });
+    }
+
+    int CountUnreadAlertEvents(const std::vector<AlertEvent>& events)
+    {
+        int count = 0;
+        for (const AlertEvent& event : events)
+        {
+            if (!event.acknowledged)
+                ++count;
+        }
+        return count;
+    }
+
+    AlertOutcome AlertOutcomeForEvent(const AlertEvent& event, const std::vector<StockQuote>& quotes)
+    {
+        AlertOutcome outcome;
+        const std::string symbol = Upper(Trim(event.symbol));
+        for (const StockQuote& quote : quotes)
+        {
+            if (Upper(Trim(quote.symbol)) != symbol || quote.price <= 0.0)
+                continue;
+
+            outcome.has_quote = true;
+            outcome.current_price = quote.price;
+            outcome.change = quote.price - event.observed_price;
+            outcome.change_percent = event.observed_price > 0.0 ? (outcome.change / event.observed_price) * 100.0 : 0.0;
+            const double abs_change = std::fabs(outcome.change_percent);
+            if (abs_change < 0.10)
+                outcome.label = "Flat";
+            else if (event.direction == "below")
+                outcome.label = outcome.change <= 0.0 ? "Extended lower" : "Rebounded";
+            else
+                outcome.label = outcome.change >= 0.0 ? "Extended" : "Pulled back";
+            outcome.detail = "Triggered at " + FormatCurrency(event.observed_price) + ", current " + FormatCurrency(outcome.current_price) + ", change " + FormatPercent(outcome.change_percent) + ".";
+            return outcome;
+        }
+
+        outcome.label = "No quote";
+        outcome.detail = "Current quote unavailable for outcome tracking.";
+        return outcome;
+    }
+
+    std::vector<InfoItem> BuildAlertNotificationRows(const std::vector<AlertEvent>& events, const std::vector<StockQuote>& quotes, size_t max_rows)
+    {
+        std::vector<InfoItem> rows;
+        for (auto it = events.rbegin(); it != events.rend(); ++it)
+        {
+            const AlertEvent& event = *it;
+            if (event.acknowledged)
+                continue;
+            const AlertOutcome outcome = AlertOutcomeForEvent(event, quotes);
+            InfoItem row;
+            row.name = event.symbol;
+            row.state = AlertEventState(event);
+            row.value = outcome.has_quote ? outcome.label + " " + FormatPercent(outcome.change_percent) : outcome.label;
+            row.detail = event.triggered_at + " | " + event.direction + " " + FormatCurrency(event.trigger_price) + " | " + outcome.detail;
+            row.source = event.source;
+            row.time = event.triggered_at;
+            rows.push_back(std::move(row));
+            if (rows.size() >= std::max<size_t>(1, max_rows))
+                break;
+        }
+        if (rows.empty())
+        {
+            InfoItem row;
+            row.name = "Notifications";
+            row.state = "Clear";
+            row.value = "0 unread";
+            row.detail = "No open alert notifications.";
+            rows.push_back(std::move(row));
+        }
+        return rows;
     }
 
     std::string AlertEventState(const AlertEvent& event)

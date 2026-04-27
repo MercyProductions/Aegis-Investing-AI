@@ -1,6 +1,7 @@
 #include "ProviderLayer.h"
 
 #include "Diagnostics.h"
+#include "Json.h"
 
 #include <algorithm>
 #include <chrono>
@@ -28,6 +29,53 @@ namespace aegis
             item.detail = std::move(detail);
             item.source = std::move(source);
             return item;
+        }
+
+        InfoItem DiagnosticRowFromLine(const std::string& line)
+        {
+            const JsonParseResult parsed = ParseJson(line);
+            if (!parsed.ok || !parsed.value.IsObject())
+                return Row("Diagnostic", "Legacy", "-", line);
+
+            const std::string provider = parsed.value["provider"].AsString("app");
+            const std::string endpoint = parsed.value["endpoint"].AsString();
+            const std::string symbol = parsed.value["symbol"].AsString();
+            const std::string status = parsed.value["status"].AsString(parsed.value["severity"].AsString("info"));
+            const std::string detail = parsed.value["detail"].AsString();
+            const std::string error = parsed.value["error"].AsString();
+            const std::string timestamp = parsed.value["timestamp"].AsString();
+            const int http_status = parsed.value["http_status"].AsInt(0);
+            const bool used_cache = parsed.value["used_cache"].AsBool(false);
+
+            std::string name = provider;
+            if (!endpoint.empty())
+                name += " / " + endpoint;
+            std::string value = http_status > 0 ? "HTTP " + std::to_string(http_status) : (used_cache ? "Cache" : "-");
+            std::string row_detail;
+            if (!symbol.empty())
+                row_detail += symbol + " ";
+            if (!timestamp.empty())
+                row_detail += "[" + timestamp + "] ";
+            row_detail += detail;
+            if (!error.empty())
+            {
+                if (!row_detail.empty())
+                    row_detail += " ";
+                row_detail += "error=" + error;
+            }
+            if (row_detail.empty())
+                row_detail = line;
+            return Row(name, status, value, row_detail, provider);
+        }
+
+        bool LooksLikeRateLimit(const std::string& line)
+        {
+            const std::string lower = Lower(line);
+            return lower.find("rate") != std::string::npos ||
+                lower.find("limit") != std::string::npos ||
+                lower.find("429") != std::string::npos ||
+                lower.find("provider-limit") != std::string::npos ||
+                lower.find("api call frequency") != std::string::npos;
         }
 
         std::vector<double> Returns(const std::vector<Candle>& candles)
@@ -219,6 +267,125 @@ namespace aegis
         return configured;
     }
 
+    bool IsProviderRateLimitResponse(int http_status, const std::string& body)
+    {
+        if (http_status == 429)
+            return true;
+        const std::string lower = Lower(body);
+        return lower.find("rate limit") != std::string::npos ||
+            lower.find("api call frequency") != std::string::npos ||
+            lower.find("standard api call frequency") != std::string::npos ||
+            lower.find("premium endpoint") != std::string::npos ||
+            lower.find("thank you for using alpha vantage") != std::string::npos;
+    }
+
+    int NextProviderRetryDelayMs(int attempt, int base_backoff_ms)
+    {
+        const int safe_attempt = std::max(1, attempt);
+        const int safe_base = std::max(250, base_backoff_ms);
+        const int exponent = std::min(6, safe_attempt - 1);
+        const int multiplier = 1 << exponent;
+        return std::min(60000, safe_base * multiplier);
+    }
+
+    int SecThrottleDelayMs(int elapsed_since_last_ms, int min_interval_ms)
+    {
+        const int safe_elapsed = std::max(0, elapsed_since_last_ms);
+        const int safe_min = std::clamp(min_interval_ms, 100, 1000);
+        return std::max(0, safe_min - safe_elapsed);
+    }
+
+    ProviderResponseMetadata EvaluateProviderRequest(const ProviderRequest& request)
+    {
+        ProviderResponseMetadata metadata;
+        const std::string provider = Trim(request.provider).empty() ? "Provider" : Trim(request.provider);
+        const std::string endpoint = Trim(request.endpoint).empty() ? "request" : Trim(request.endpoint);
+        const std::string target = Trim(request.symbol).empty() ? endpoint : endpoint + " " + Upper(Trim(request.symbol));
+        metadata.source = provider;
+
+        if (!request.live_attempted && request.cache_exists && request.cache_fresh && !request.force_live)
+        {
+            metadata.use_cache = true;
+            metadata.cache_age_label = "fresh cache hit";
+            metadata.status = target + " loaded from fresh " + provider + " cache.";
+            return metadata;
+        }
+
+        if (!request.live_attempted)
+        {
+            metadata.should_fetch_live = true;
+            metadata.stale = request.cache_exists && !request.cache_fresh;
+            metadata.cache_age_label = request.cache_exists
+                ? (request.cache_fresh ? "force-live bypassed fresh cache" : "stale cache available")
+                : "cache miss";
+            metadata.status = metadata.stale
+                ? target + " cache is stale; live refresh is required."
+                : target + " needs a live " + provider + " fetch.";
+            return metadata;
+        }
+
+        if (request.live_success)
+        {
+            metadata.live = true;
+            metadata.cache_age_label = "live fetch";
+            metadata.status = target + " synced live from " + provider + ".";
+            return metadata;
+        }
+
+        const bool limited = request.rate_limited || IsProviderRateLimitResponse(request.http_status, request.response_body) || Lower(request.error).find("rate limit") != std::string::npos;
+        if (limited)
+        {
+            metadata.rate_limited = true;
+            metadata.fallback = true;
+            metadata.use_cache = request.cache_exists;
+            metadata.stale = request.cache_exists && !request.cache_fresh;
+            metadata.cache_age_label = request.cache_exists ? "provider-limit cache fallback" : "provider-limit no-cache fallback";
+            metadata.fallback_reason = provider + " rate limit or entitlement limit.";
+            metadata.status = request.cache_exists
+                ? target + " rate-limited by " + provider + "; using cache."
+                : target + " rate-limited by " + provider + "; no cache is available.";
+            return metadata;
+        }
+
+        const bool has_attempts_remaining = request.attempt < std::max(1, request.max_attempts);
+        if (has_attempts_remaining)
+        {
+            metadata.retry = true;
+            metadata.next_retry_ms = NextProviderRetryDelayMs(request.attempt, request.retry_backoff_ms);
+            metadata.cache_age_label = request.cache_exists ? "cache held while retrying" : "retry without cache";
+            metadata.status = target + " provider request failed; retry scheduled.";
+            metadata.fallback_reason = Trim(request.error).empty() ? "Provider returned no usable data." : request.error;
+            return metadata;
+        }
+
+        metadata.fallback = true;
+        metadata.use_cache = request.cache_exists;
+        metadata.stale = request.cache_exists && !request.cache_fresh;
+        metadata.cache_age_label = request.cache_exists ? "provider-error cache fallback" : "provider-error no-cache fallback";
+        metadata.fallback_reason = Trim(request.error).empty() ? "Provider returned no usable data." : request.error;
+        metadata.status = request.cache_exists
+            ? target + " provider request failed; using cache fallback."
+            : target + " provider request failed and no cache is available.";
+        return metadata;
+    }
+
+    std::vector<InfoItem> BuildProviderCapabilityRows(const Config& config)
+    {
+        const bool alpha_configured = !Trim(config.alpha_vantage_api_key).empty();
+        return {
+            Row("Quotes", alpha_configured ? "Configured" : "Demo/cache", "Alpha Vantage GLOBAL_QUOTE", "Watchlist refreshes use the configured quote TTL, diagnostics, and cache/fallback labels.", "Alpha Vantage"),
+            Row("History", alpha_configured ? "Configured" : "Cache/demo", "TIME_SERIES_DAILY", "Daily candle loads support cache hits, stale-cache fallback, force-live refresh, and no-lookahead analytics.", "Alpha Vantage"),
+            Row("Fundamentals", alpha_configured ? "Configured" : "Generated fallback", "OVERVIEW", "Provider-backed values populate revenue/EPS/margins/debt/FCF style panels when available; generated values must stay labeled.", "Alpha Vantage"),
+            Row("News sentiment", alpha_configured ? "Configured" : "Provider slot", "NEWS_SENTIMENT", "Ticker headlines and sentiment rows are routed through the research bundle and freshness surfaces.", "Alpha Vantage"),
+            Row("Earnings", alpha_configured ? "Configured" : "Provider slot", "EARNINGS", "Upcoming/prior earnings rows are ready for provider data and fallback labels.", "Alpha Vantage"),
+            Row("Filings", "Ready", "SEC submissions", "10-K, 10-Q, 8-K, and insider forms use SEC-friendly user-agent configuration and archive links.", "SEC EDGAR"),
+            Row("Company facts", "Provider slot", "SEC XBRL", "Future SEC companyfacts integration should backfill reported fundamentals and source citations.", "SEC EDGAR"),
+            Row("Macro", "Provider slot", "FRED", "Rates, CPI, unemployment, yield curve, and dollar-proxy feeds have a registry row before live wiring.", "FRED"),
+            Row("Options", "Provider slot", "Options chain", "Expected move, IV rank, skew, open interest, and unusual volume stay non-actionable until provider-backed.", "Options"),
+            Row("Broker", "Paper-only slot", "Alpaca/imports", "Broker sync/execution must remain paper-first with explicit unlock, confirmations, and audit trail.", "Broker")
+        };
+    }
+
     std::vector<InfoItem> BuildProviderControlRows(const Config& config)
     {
         return {
@@ -237,8 +404,38 @@ namespace aegis
             Row("History TTL", "Policy", std::to_string(std::max(1, config.history_cache_hours)) + " hr", "Daily candle cache age before live refresh is preferred."),
             Row("Research TTL", "Policy", std::to_string(std::max(1, config.research_cache_hours)) + " hr", "Fundamentals/news/earnings/SEC bundle cache age before live refresh is preferred."),
             Row("Max cache", "Policy", std::to_string(std::max(25, config.max_cache_mb)) + " MB", "Soft limit used by prune/backup diagnostics."),
-            Row("Force live", config.force_live_refresh ? "Enabled" : "Off", config.force_live_refresh ? "Bypass fresh cache" : "Use cache when fresh", "Manual research sessions can force a live refresh while still falling back safely.")
+            Row("Force live", config.force_live_refresh ? "Enabled" : "Off", config.force_live_refresh ? "Bypass fresh cache" : "Use cache when fresh", "Manual research sessions can force a live refresh while still falling back safely."),
+            Row("Force-live risk", config.force_live_refresh ? "Review" : "Normal", config.force_live_refresh ? "Higher rate-limit risk" : "Cache protects providers", config.force_live_refresh ? "Fresh caches are bypassed, so Alpha Vantage and SEC requests may hit plan or courtesy limits sooner. Fallbacks remain enabled and diagnostics will show limit events." : "Fresh cache reads reduce provider pressure and keep decision panels available during provider issues."),
+            Row("SEC throttle", "Active", "120 ms minimum", "SEC EDGAR calls are paced locally before submissions requests and tagged in diagnostics if the app has to wait.")
         };
+    }
+
+    std::vector<InfoItem> BuildProviderDiagnosticRows(size_t max_lines)
+    {
+        const std::vector<std::string> lines = LoadRecentDiagnosticLines(std::max<size_t>(1, max_lines));
+        std::vector<InfoItem> rows;
+        rows.reserve(lines.size());
+        for (auto it = lines.rbegin(); it != lines.rend(); ++it)
+            rows.push_back(DiagnosticRowFromLine(*it));
+        if (rows.empty())
+            rows.push_back(Row("Provider diagnostics", "Empty", "-", "No provider diagnostics have been written yet."));
+        return rows;
+    }
+
+    std::vector<InfoItem> BuildProviderLimitRows(size_t max_lines)
+    {
+        const std::vector<std::string> lines = LoadRecentDiagnosticLines(std::max<size_t>(1, max_lines));
+        std::vector<InfoItem> rows;
+        for (auto it = lines.rbegin(); it != lines.rend(); ++it)
+        {
+            if (LooksLikeRateLimit(*it))
+                rows.push_back(DiagnosticRowFromLine(*it));
+            if (rows.size() >= 8)
+                break;
+        }
+        if (rows.empty())
+            rows.push_back(Row("Rate limits", "Clear", "-", "No recent Alpha Vantage, SEC, or provider limit events found in diagnostics."));
+        return rows;
     }
 
     std::vector<InfoItem> BuildStorageMigrationRows()

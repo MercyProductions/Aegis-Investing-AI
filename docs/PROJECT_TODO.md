@@ -28,6 +28,11 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 - [x] Session persistence extracted into `AppSession`.
 - [x] Persistent app-data facade started in `AppStorage`.
 - [x] SQLite v1 schema document exists.
+- [x] Data-quality rows, estimated-value labels, and confidence decay for demo/estimated quote data.
+- [x] Expanded command palette actions for ticker jump/add, alert creation, reports, briefings, settings, alerts, and web bridge.
+- [x] UI preference persistence for theme, compact mode, font scale, and high contrast.
+- [x] In-app keyboard shortcut and command reference.
+- [x] Data-status badge and breakdown for live, demo, cache, stale, rate-limited, and offline states.
 
 ## Absolutely Needed
 
@@ -44,7 +49,7 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 - [ ] P1: Add a `Result<T>` or consistent status object pattern for provider/storage/service operations.
 - [ ] P1: Move all reusable ImGui widgets into a `UiComponents` module.
 - [ ] P1: Move all chart rendering into a dedicated `ChartRenderer` module.
-- [ ] P1: Move all CSV parsing/export helpers into a dedicated `Csv` module.
+- [x] P1: Move shared CSV parsing/export helpers into a dedicated `Csv` module.
 - [ ] P1: Move all formatting helpers into a dedicated `Format` module.
 
 ### Storage And Data Durability
@@ -69,16 +74,16 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 
 - [ ] P0: Finish centralizing provider logic behind one provider interface.
 - [ ] P0: Move direct HTTP/provider work out of scattered modules and into provider clients.
-- [ ] P0: Add provider request objects with endpoint, symbol, cache policy, timeout, retry policy, and cancellation ID.
+- [x] P0: Add provider request objects with endpoint, symbol, cache policy, timeout, retry policy, and cancellation ID.
 - [ ] P0: Add provider response metadata everywhere: source, fetched time, cache age, stale/live state, HTTP status, fallback reason, and rate-limit reason.
 - [ ] P0: Add cancellation/debouncing for symbol switching, chart loads, research loads, and global refreshes.
 - [ ] P0: Add retry/backoff behavior for provider failures.
-- [ ] P0: Add provider rate-limit tracking for Alpha Vantage and SEC.
-- [ ] P0: Add SEC throttling that respects SEC-friendly access patterns.
+- [x] P0: Add provider rate-limit tracking for Alpha Vantage and SEC.
+- [x] P0: Add SEC throttling that respects SEC-friendly access patterns.
 - [ ] P0: Make provider cache policy configurable per provider and endpoint.
-- [ ] P0: Add force-live refresh that bypasses cache safely and reports rate-limit risk.
-- [ ] P1: Add provider capability registry so future providers can declare support for quotes, history, fundamentals, news, filings, macro, options, and broker data.
-- [ ] P1: Add provider diagnostics panel with recent request table.
+- [x] P0: Add force-live refresh that bypasses cache safely and reports rate-limit risk.
+- [x] P1: Add provider capability registry so future providers can declare support for quotes, history, fundamentals, news, filings, macro, options, and broker data.
+- [x] P1: Add provider diagnostics panel with recent request table.
 - [ ] P1: Add provider failover ordering.
 - [ ] P1: Add offline mode that clearly shows cache-only data.
 - [ ] P1: Add stale-data warnings on every decision-impacting panel.
@@ -86,14 +91,16 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 ### Real Data Quality
 
 - [ ] P0: Replace decision-impacting synthetic estimates wherever possible.
-- [ ] P0: Clearly label any remaining estimated values as estimated.
+- [x] P0: Clearly label any remaining estimated values as estimated.
 - [ ] P0: Use real provider data for market cap, beta, fundamentals, earnings, dividends, and sector where available.
 - [ ] P0: Calculate portfolio beta and correlations from historical returns, not sector estimates.
 - [ ] P0: Use adjusted historical candles for backtests and portfolio analytics.
 - [ ] P0: Add splits/dividends awareness in backtesting and historical analytics.
 - [ ] P0: Improve ETF exposure using real ETF holdings data.
 - [ ] P0: Improve options expected move using real option chain data before showing it as actionable.
-- [ ] P1: Add confidence decay when quotes/history/news/filings are stale.
+- [x] P1: Add quote-level confidence decay when quote data is demo, stale, fallback, or estimated.
+- [ ] P1: Extend confidence decay to history, news, and filings staleness.
+- [x] P1: Add initial estimated/provider-backed data-quality rows for selected symbols.
 - [ ] P1: Add data-source comparison where multiple providers disagree.
 - [ ] P1: Add “estimated / provider-backed / unavailable” badges to every metric.
 
@@ -101,41 +108,43 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 
 - [ ] P0: Add a real automated test project or test runner beyond the current self-test path.
 - [ ] P0: Add tests for SQLite migrations.
-- [ ] P0: Add tests for storage load/save/restore/backup failure cases.
-- [ ] P0: Add tests for provider cache hit, cache miss, stale cache, live fetch, rate limit, retry, and fallback.
-- [ ] P0: Add tests for CSV import/export with quotes, commas, blank rows, malformed rows, and duplicate symbols.
-- [ ] P0: Add tests for broker import profiles: Robinhood, Fidelity, Schwab, Webull, IBKR, and generic.
-- [ ] P0: Add tests for indicators: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, drawdown, volatility.
-- [ ] P0: Add tests for backtest no-lookahead behavior.
-- [ ] P0: Add tests for position sizing modes.
-- [ ] P0: Add tests for scoring/model explanation.
-- [ ] P0: Add tests for SEC filing parsing and risk-factor diffing.
-- [ ] P0: Add tests for alert triggering, duplicate suppression, snooze, acknowledge, and history persistence.
-- [ ] P0: Add tests for secret redaction in logs, diagnostics, reports, and backups.
+- [x] P0: Add tests for storage load/save and backup validation failure cases.
+- [ ] P0: Add tests for one-click restore failure cases once restore UX exists.
+- [x] P0: Add tests for provider cache hit, cache miss, stale cache, live fetch, rate limit, retry, and fallback.
+- [x] P0: Add tests for CSV import/export with quotes, commas, blank rows, malformed rows, and duplicate symbols.
+- [x] P0: Add baseline CSV parser/exporter tests for quoted commas and escaped quotes.
+- [x] P0: Add tests for broker import profiles: Robinhood, Fidelity, Schwab, Webull, IBKR, and generic.
+- [x] P0: Add tests for indicators: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, drawdown, volatility.
+- [x] P0: Add tests for backtest no-lookahead behavior.
+- [x] P0: Add tests for position sizing modes.
+- [x] P0: Add tests for scoring/model explanation.
+- [x] P0: Add tests for SEC filing parsing and risk-factor diffing.
+- [x] P0: Add tests for alert triggering, duplicate suppression, snooze, acknowledge, and history persistence.
+- [x] P0: Add tests for secret redaction in logs, diagnostics, reports, and backups.
 - [ ] P1: Add UI smoke tests for launching, switching tabs, loading data, and closing cleanly.
 - [ ] P1: Add snapshot-style tests for report export.
 - [ ] P1: Add build-time check that release artifacts include required docs/config/schema.
 
 ### Async, Threading, And Shutdown Safety
 
-- [ ] P0: Ensure every future/background job is cancellable, awaited, or safely ignored before shutdown.
-- [ ] P0: Use request IDs consistently for refresh, validation, history, research, alerts, and future provider jobs.
-- [ ] P0: Prevent stale provider results from overwriting newer symbol selections.
+- [x] P0: Ensure every future/background job is cancellable, awaited, or safely ignored before shutdown.
+- [x] P0: Use request IDs consistently for refresh, validation, history, research, alerts, and future provider jobs.
+- [x] P0: Prevent stale provider results from overwriting newer symbol selections.
 - [ ] P0: Add a central task manager for background work.
-- [ ] P0: Add graceful shutdown state with timeout and diagnostics if a provider hangs.
-- [ ] P1: Add progress indicators for long-running jobs.
-- [ ] P1: Add per-task status rows in Diagnostics.
+- [x] P0: Add graceful shutdown state with timeout and diagnostics if a provider hangs.
+- [x] P1: Add progress indicators for long-running jobs.
+- [x] P1: Add per-task status rows in Diagnostics.
 
 ### Alerts And Notifications
 
-- [ ] P0: Build a real background alert monitor.
-- [ ] P0: Evaluate alerts on a schedule independent of manual refresh.
+- [x] P0: Build a real background alert monitor.
+- [x] P0: Evaluate alerts on a schedule independent of manual refresh.
 - [ ] P0: Persist alert trigger history in SQLite.
-- [ ] P0: Support acknowledge, snooze, enable/disable, and delete with audit trails.
-- [ ] P0: Add notification center with unread alert count.
+- [x] P0: Support acknowledge, snooze, enable/disable, and delete with audit trails.
+- [x] P0: Add notification center with unread alert count.
 - [ ] P0: Add Windows toast notifications.
-- [ ] P0: Add alert freshness/source labels so users know whether alert checks used live or cached quotes.
-- [ ] P1: Add alert history outcome tracking: trigger price, current price, change since trigger.
+- [x] P0: Add alert freshness/source labels so users know whether alert checks used live or cached quotes.
+- [x] P1: Add alert history outcome tracking: trigger price, current price, change since trigger.
 - [ ] P1: Add alert types: price above/below, percent move, volume spike, score change, earnings soon, filing posted, news sentiment change.
 - [ ] P1: Add quiet hours and notification preferences.
 
@@ -168,16 +177,20 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 ### Input Validation
 
 - [ ] P0: Validate ticker symbols everywhere.
+- [x] P0: Add central `SymbolRules` module for ticker normalization and validation.
+- [x] P0: Wire central ticker validation into watchlist, broker import, holdings, alerts, and settings health.
 - [x] P0: Normalize Settings watchlist symbols through `SettingsService` before saving/refreshing.
 - [ ] P0: Normalize aliases and special ticker formats consistently.
-- [ ] P0: Add import preview/error rows for every import path.
-- [ ] P0: Validate holdings: symbol, shares, average cost, note length, duplicate handling.
-- [ ] P0: Validate alerts: symbol, trigger price, enabled state, duplicate rules.
-- [ ] P0: Validate trade plans: entry, stop, target, shares, risk/reward, earnings date.
-- [ ] P0: Validate journal rows: date, symbol, action, grade, P/L.
-- [ ] P0: Validate watchlist size and symbol count against provider/rate-limit constraints.
+- [x] P0: Add import preview/error rows for every CSV workflow import path.
+- [x] P0: Validate holdings: symbol, shares, average cost, note length, duplicate handling.
+- [x] P0: Validate alerts: symbol, trigger price, enabled state, duplicate rules.
+- [x] P0: Validate trade plans: entry, stop, target, shares, and risk/reward. Earnings-date validation still belongs with the real earnings calendar.
+- [x] P0: Validate journal rows: date, symbol, action, grade, and P/L.
+- [x] P0: Add `ImportValidation` service for CSV holdings, alerts, trade plans, notes, and journal row validation.
+- [x] P0: Report imported and rejected CSV workflow row counts after import.
+- [x] P0: Validate watchlist size and symbol count against provider/rate-limit constraints.
 - [ ] P1: Add ticker autocomplete/search.
-- [ ] P1: Add user-facing error messages that say exactly which rows failed and why.
+- [x] P1: Add user-facing error messages that say exactly which rows failed and why.
 
 ## Needs Improvements
 
@@ -186,16 +199,16 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 - [ ] P1: Reduce tab density, especially Portfolio, Research, Integrations, and Settings.
 - [ ] P1: Add resizable split panes.
 - [ ] P1: Add compact/expanded modes per tab.
-- [ ] P1: Add loading spinners or progress indicators for active provider jobs.
+- [x] P1: Add loading spinners or progress indicators for active provider jobs.
 - [ ] P1: Add empty states for watchlist, holdings, alerts, notes, journal, compare basket, and provider results.
-- [ ] P1: Save theme, compact mode, font scale, high contrast, and layout preferences reliably.
+- [x] P1: Save theme, compact mode, font scale, high contrast, and layout preferences reliably.
 - [ ] P1: Add keyboard focus handling and predictable tab order.
-- [ ] P1: Add high contrast polish beyond the config flag.
-- [ ] P1: Add command palette actions for ticker search, add alert, save plan, export report, switch tab, refresh, open settings.
-- [ ] P1: Add keyboard shortcuts with a small help reference.
-- [ ] P1: Add notification center.
-- [ ] P1: Add “Today’s Focus” view.
-- [ ] P1: Add better data-status badge: demo, live, stale, cache-only, rate-limited, offline.
+- [x] P1: Add high contrast polish beyond the config flag.
+- [x] P1: Add command palette actions for ticker search, add alert, save plan, export report, switch tab, refresh, open settings.
+- [x] P1: Add keyboard shortcuts with a small help reference.
+- [x] P1: Add notification center.
+- [x] P1: Add Today's Focus view.
+- [x] P1: Add better data-status badge: demo, live, stale, cache-only, rate-limited, offline.
 - [ ] P2: Add detachable panels if practical in ImGui.
 - [ ] P2: Add customizable dashboard layout.
 - [ ] P2: Add saved workspaces.
@@ -203,10 +216,11 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 ### Chart Lab
 
 - [ ] P1: Add zoom and pan.
-- [ ] P1: Add crosshair with OHLC/volume/indicator readout.
-- [ ] P1: Add timeframe buttons: 1M, 3M, 6M, YTD, 1Y, 3Y, 5Y.
-- [ ] P1: Add daily/weekly/monthly candle aggregation.
-- [ ] P1: Add indicator toggles: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, volume, drawdown, relative strength.
+- [x] P1: Add crosshair with OHLC/volume/indicator readout.
+- [x] P1: Add timeframe buttons: 1M, 3M, 6M, YTD, 1Y, 3Y, 5Y.
+- [x] P1: Add daily/weekly/monthly candle aggregation.
+- [x] P1: Add indicator toggles: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, volume, drawdown, relative strength.
+- [x] P1: Persist current Chart Lab window and indicator layout in the app session.
 - [ ] P1: Add chart markers for earnings, news, SEC filings, alerts, trade plans, entries, exits, dividends, and splits.
 - [ ] P1: Add saved chart layouts.
 - [ ] P1: Add indicator presets.
@@ -391,11 +405,12 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 - [ ] P0: Implement tables from `docs/sqlite-schema-v1.sql`.
 - [ ] P0: Migrate holdings, alerts, alert events, trade plans, notes, journal, diagnostics, audit, session, and provider cache.
 - [ ] P0: Add backup/restore UI.
-- [ ] P0: Add storage tests.
+- [x] P0: Add storage tests for the current TSV facade and backup validation.
+- [ ] P0: Add SQLite storage tests after SQLite runtime integration.
 
 ### Phase 3: Provider Hardening
 
-- [ ] P0: Create provider request/response types.
+- [x] P0: Create provider request/response types.
 - [ ] P0: Move Alpha Vantage calls behind provider client.
 - [ ] P0: Move SEC calls behind provider client.
 - [ ] P0: Add cancellation/debouncing.
@@ -412,7 +427,7 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 
 ### Phase 5: Workflow Power
 
-- [ ] P1: Build background alert monitor.
+- [x] P1: Build background alert monitor.
 - [ ] P1: Add Windows toast notifications.
 - [ ] P1: Add true earnings calendar.
 - [ ] P1: Add SEC risk-factor diff tracker.

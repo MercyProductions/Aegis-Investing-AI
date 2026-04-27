@@ -1,4 +1,4 @@
-#include "Json.h"
+﻿#include "Json.h"
 #include "Platform.h"
 #include "StockData.h"
 #include "AdvancedAnalytics.h"
@@ -6,11 +6,16 @@
 #include "AppSession.h"
 #include "AppStorage.h"
 #include "BrokerImport.h"
+#include "Csv.h"
 #include "Diagnostics.h"
+#include "ImportValidation.h"
+#include "PositionSizing.h"
 #include "ProviderLayer.h"
 #include "ReportExport.h"
 #include "SelfTests.h"
 #include "SettingsService.h"
+#include "SymbolRules.h"
+#include "WorkflowValidation.h"
 
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
@@ -26,6 +31,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <ctime>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -54,6 +60,7 @@ namespace
     void CleanupRenderTarget();
     void ApplyTheme();
     void ApplyLightTheme();
+    void ApplyHighContrastTheme(bool light_theme);
     LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     ImFont* g_font_regular = nullptr;
@@ -74,6 +81,15 @@ namespace
     ImVec4 V4(float r, float g, float b, float a = 1.0f)
     {
         return ImVec4(r, g, b, a);
+    }
+
+    int CurrentYtdTradingDays()
+    {
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t timestamp = std::chrono::system_clock::to_time_t(now);
+        std::tm local_time{};
+        localtime_s(&local_time, &timestamp);
+        return std::clamp(((local_time.tm_yday + 1) * 5) / 7, 30, 252);
     }
 
     void TextMuted(const char* text)
@@ -305,6 +321,66 @@ namespace
             ImGui::TextWrapped("%s", detail.c_str());
     }
 
+    double MovingAverageAt(const std::vector<aegis::Candle>& candles, int index, int period)
+    {
+        if (candles.empty() || index < 0 || period <= 0)
+            return 0.0;
+        const int end = std::min(index, static_cast<int>(candles.size()) - 1);
+        const int start = std::max(0, end - period + 1);
+        double sum = 0.0;
+        int count = 0;
+        for (int i = start; i <= end; ++i)
+        {
+            sum += candles[static_cast<size_t>(i)].close;
+            ++count;
+        }
+        return count > 0 ? sum / static_cast<double>(count) : 0.0;
+    }
+
+    double RsiAt(const std::vector<aegis::Candle>& candles, int index, int period)
+    {
+        if (candles.size() < 2 || index <= 0 || period <= 0)
+            return 50.0;
+        const int end = std::min(index, static_cast<int>(candles.size()) - 1);
+        const int start = std::max(1, end - period + 1);
+        double gains = 0.0;
+        double losses = 0.0;
+        int count = 0;
+        for (int i = start; i <= end; ++i)
+        {
+            const double change = candles[static_cast<size_t>(i)].close - candles[static_cast<size_t>(i - 1)].close;
+            if (change >= 0.0)
+                gains += change;
+            else
+                losses += std::fabs(change);
+            ++count;
+        }
+        if (count == 0)
+            return 50.0;
+        const double average_gain = gains / static_cast<double>(count);
+        const double average_loss = losses / static_cast<double>(count);
+        if (average_loss <= 0.000001)
+            return average_gain > 0.0 ? 99.99 : 50.0;
+        const double rs = average_gain / average_loss;
+        return 100.0 - (100.0 / (1.0 + rs));
+    }
+
+    long long AverageVolumeAt(const std::vector<aegis::Candle>& candles, int index, int period)
+    {
+        if (candles.empty() || index < 0 || period <= 0)
+            return 0;
+        const int end = std::min(index, static_cast<int>(candles.size()) - 1);
+        const int start = std::max(0, end - period + 1);
+        long long sum = 0;
+        int count = 0;
+        for (int i = start; i <= end; ++i)
+        {
+            sum += candles[static_cast<size_t>(i)].volume;
+            ++count;
+        }
+        return count > 0 ? sum / count : 0;
+    }
+
     void PlotCandleChart(const std::vector<aegis::Candle>& candles, int visible_days, bool show_volume, const ImVec2& size)
     {
         if (candles.empty())
@@ -388,10 +464,21 @@ namespace
         {
             const ImVec2 mouse = ImGui::GetIO().MousePos;
             const int index = std::clamp(static_cast<int>((mouse.x - (pos.x + pad)) / std::max(1.0f, step)), 0, count - 1);
-            const aegis::Candle& candle = candles[static_cast<size_t>(start + index)];
+            const int candle_index = start + index;
+            const aegis::Candle& candle = candles[static_cast<size_t>(candle_index)];
             const float x = pos.x + pad + step * (static_cast<float>(index) + 0.5f);
             draw->AddLine(ImVec2(x, pos.y + pad), ImVec2(x, pos.y + size.y - pad), Col(0.95f, 1.0f, 0.96f, 0.28f), 1.0f);
             draw->AddLine(ImVec2(pos.x + pad, mouse.y), ImVec2(pos.x + pad + plot_w, mouse.y), Col(0.95f, 1.0f, 0.96f, 0.18f), 1.0f);
+            const double sma20 = MovingAverageAt(candles, candle_index, 20);
+            const double sma50 = MovingAverageAt(candles, candle_index, 50);
+            const double rsi14 = RsiAt(candles, candle_index, 14);
+            const long long average_volume = AverageVolumeAt(candles, candle_index, 20);
+            const double bar_change = candle_index > 0 && candles[static_cast<size_t>(candle_index - 1)].close > 0.0
+                ? ((candle.close - candles[static_cast<size_t>(candle_index - 1)].close) / candles[static_cast<size_t>(candle_index - 1)].close) * 100.0
+                : 0.0;
+            const double volume_ratio = average_volume > 0
+                ? static_cast<double>(candle.volume) / static_cast<double>(average_volume)
+                : 0.0;
             ImGui::BeginTooltip();
             ImGui::TextUnformatted(candle.date.c_str());
             ImGui::Text("O %s  H %s  L %s  C %s",
@@ -400,6 +487,12 @@ namespace
                 aegis::FormatCurrency(candle.low).c_str(),
                 aegis::FormatCurrency(candle.close).c_str());
             ImGui::Text("Volume %s", aegis::FormatVolume(candle.volume).c_str());
+            ImGui::Separator();
+            ImGui::Text("SMA20 %s  SMA50 %s",
+                aegis::FormatCurrency(sma20).c_str(),
+                aegis::FormatCurrency(sma50).c_str());
+            ImGui::Text("RSI14 %.1f  Bar %s", rsi14, aegis::FormatPercent(bar_change).c_str());
+            ImGui::Text("Volume vs 20-bar avg %.2fx", volume_ratio);
             ImGui::EndTooltip();
         }
     }
@@ -422,6 +515,7 @@ namespace
 
     struct ValidationFutureResult
     {
+        int request_id = 0;
         aegis::AlphaValidationResult validation;
         std::string status;
     };
@@ -429,6 +523,7 @@ namespace
     struct HistoryFutureResult
     {
         int request_id = 0;
+        int requested_days = 0;
         std::string symbol;
         aegis::HistoricalCandlesResult result;
     };
@@ -468,10 +563,7 @@ namespace
             SetBuffer(compare_symbols_buffer_, sizeof(compare_symbols_buffer_), DefaultCompareSymbols());
             LoadSessionState();
             show_setup_wizard_ = config_.alpha_vantage_api_key.empty();
-            if (light_theme_)
-                ApplyLightTheme();
-            else
-                ApplyTheme();
+            ApplyActiveTheme();
 
             const aegis::RememberedCredentials creds = aegis::LoadRememberedCredentials();
             if (creds.ok)
@@ -497,17 +589,28 @@ namespace
         void Shutdown()
         {
             ++refresh_request_id_;
+            ++validation_request_id_;
             ++history_request_id_;
             ++research_request_id_;
             status_ = "Waiting for provider work to finish...";
-            if (refresh_future_.valid())
-                refresh_future_.wait();
-            if (validation_future_.valid())
-                validation_future_.wait();
-            if (history_future_.valid())
-                history_future_.wait();
-            if (research_future_.valid())
-                research_future_.wait();
+            const auto wait_for_future = [](auto& future, const char* name) {
+                if (!future.valid())
+                    return;
+                if (future.wait_for(std::chrono::seconds(3)) != std::future_status::ready)
+                {
+                    aegis::AppendDiagnosticEvent({ "warning", "app", "shutdown", name, "timeout", "Provider task did not finish within 3 seconds during shutdown; waiting for safe cleanup.", "", 0, 3000, false });
+                    future.wait();
+                    aegis::AppendDiagnosticEvent({ "info", "app", "shutdown", name, "completed", "Slow provider task completed after shutdown timeout warning.", "", 0, 0, false });
+                }
+                else
+                {
+                    future.wait();
+                }
+            };
+            wait_for_future(refresh_future_, "quote-refresh");
+            wait_for_future(validation_future_, "api-validation");
+            wait_for_future(history_future_, "history-load");
+            wait_for_future(research_future_, "research-load");
             SaveSessionState();
             refresh_in_flight_ = false;
             validation_in_flight_ = false;
@@ -523,6 +626,7 @@ namespace
             PollHistoryLoad();
             PollResearchLoad();
             MaybeAutoRefresh();
+            MaybeAlertMonitor();
 
             ImGuiIO& io = ImGui::GetIO();
             io.FontGlobalScale = static_cast<float>(std::clamp(config_.font_scale_percent, 85, 150)) / 100.0f;
@@ -548,13 +652,18 @@ namespace
         bool history_in_flight_ = false;
         bool research_in_flight_ = false;
         int refresh_request_id_ = 0;
+        int validation_request_id_ = 0;
         int history_request_id_ = 0;
+        int history_requested_days_ = 0;
+        int history_in_flight_days_ = 0;
         int research_request_id_ = 0;
         std::chrono::steady_clock::time_point last_refresh_ = std::chrono::steady_clock::now();
+        std::chrono::steady_clock::time_point last_alert_check_{};
         std::string status_ = "Starting Aegis stock workspace...";
         std::string validation_status_ = "Key not validated this session.";
         std::string history_status_ = "Historical candles not loaded yet.";
         std::string research_status_ = "Research bundle not loaded yet.";
+        std::string alert_monitor_status_ = "Alert monitor waiting for quote data.";
         std::string selected_symbol_;
         std::string history_symbol_;
         std::string history_request_symbol_;
@@ -590,11 +699,16 @@ namespace
         int selected_trade_plan_index_ = -1;
         int chart_days_ = 180;
         int chart_preset_ = 0;
+        int chart_aggregation_ = 0;
         int sizing_mode_ = 1;
         int selected_note_index_ = -1;
         int selected_journal_index_ = -1;
         int screen_preset_index_ = 0;
         bool show_chart_volume_ = true;
+        bool show_trend_indicators_ = true;
+        bool show_momentum_indicators_ = true;
+        bool show_volatility_indicators_ = true;
+        bool show_relative_indicators_ = true;
         bool light_theme_ = false;
         bool compact_mode_ = false;
         bool show_setup_wizard_ = false;
@@ -629,6 +743,15 @@ namespace
         std::string broker_import_status_;
         std::string report_status_;
 
+        struct ImportIssue
+        {
+            std::string file;
+            int row = 0;
+            std::string value;
+            std::string reason;
+        };
+        std::vector<ImportIssue> import_issues_;
+
         struct PortfolioTotals
         {
             double market_value = 0.0;
@@ -654,6 +777,15 @@ namespace
             double value = 0.0;
             double percent = 0.0;
             int count = 0;
+        };
+
+        struct DataStatusSummary
+        {
+            std::string label = "Unknown";
+            std::string state = "Review";
+            std::string freshness = "--";
+            std::string detail;
+            ImVec4 color = V4(0.42f, 0.48f, 0.52f, 1.0f);
         };
 
         void RenderShell()
@@ -718,6 +850,9 @@ namespace
             ImGui::TextWrapped("%s", state_.market_status.c_str());
             TextMuted(state_.last_refresh_label.c_str());
             ImGui::Separator();
+            const int unread_alerts = aegis::CountUnreadAlertEvents(alert_events_);
+            const std::string alert_line = std::to_string(unread_alerts) + " unread alert" + (unread_alerts == 1 ? "" : "s");
+            TextMuted(alert_line.c_str());
             ImGui::TextWrapped("%s", status_.c_str());
             ImGui::EndChild();
 
@@ -736,9 +871,12 @@ namespace
         void RenderHeader()
         {
             ImGui::BeginChild("header", ImVec2(0, 74.0f), false, ImGuiWindowFlags_NoScrollbar);
+            const DataStatusSummary data_status = BuildDataStatusSummary();
             ImGui::PushFont(g_font_title);
             ImGui::TextUnformatted("Aegis Stock Investing AI");
             ImGui::PopFont();
+            ImGui::SameLine();
+            RenderDataStatusBadge(data_status);
             TextMuted("Native C++ market research workspace");
 
             ImGui::SameLine(ImGui::GetWindowWidth() - 676.0f);
@@ -752,22 +890,39 @@ namespace
             if (SmallActionButton(refresh_in_flight_ ? "Refreshing..." : "Refresh"))
                 BeginRefresh(false);
             ImGui::SameLine();
+            const int unread_alerts = aegis::CountUnreadAlertEvents(alert_events_);
+            const std::string alert_button = "Alerts " + std::to_string(unread_alerts);
+            if (SmallActionButton(alert_button.c_str()))
+                selected_tab_ = 7;
+            ImGui::SameLine();
             if (SmallActionButton("Open Web"))
                 aegis::OpenExternalUrl(aegis::JoinUrl(config_.auth_base_url, config_.website_path));
             ImGui::SameLine();
             if (ImGui::Checkbox("Light", &light_theme_))
             {
-                config_.ui_light_theme = light_theme_;
-                if (light_theme_)
-                    ApplyLightTheme();
-                else
-                    ApplyTheme();
-                aegis::SaveConfig(config_);
+                PersistUiPreferences("UI theme saved.");
             }
 
             ImGui::SetCursorPosY(48.0f);
-            ImGui::TextWrapped("%s", state_.source_label.c_str());
+            ImGui::TextWrapped("%s", data_status.detail.c_str());
             ImGui::EndChild();
+        }
+
+        void RenderDataStatusBadge(const DataStatusSummary& summary)
+        {
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 4.0f));
+            ImGui::PushStyleColor(ImGuiCol_Button, summary.color);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(std::min(summary.color.x + 0.08f, 1.0f), std::min(summary.color.y + 0.08f, 1.0f), std::min(summary.color.z + 0.08f, 1.0f), 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, summary.color);
+            ImGui::PushStyleColor(ImGuiCol_Text, V4(1.0f, 1.0f, 1.0f, 1.0f));
+            const std::string label = "Data: " + summary.label;
+            if (ImGui::Button(label.c_str()))
+                selected_tab_ = 8;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s\n%s", summary.state.c_str(), summary.detail.c_str());
+            ImGui::PopStyleColor(4);
+            ImGui::PopStyleVar(2);
         }
 
         void RenderDashboard()
@@ -980,11 +1135,15 @@ namespace
                 return;
             }
 
+            chart_days_ = std::clamp(chart_days_, 30, 1260);
             EnsureHistoryLoad(*quote);
             EnsureResearchLoad(*quote);
-            std::vector<aegis::Candle> candles = history_symbol_ == quote->symbol && !history_result_.candles.empty()
+            std::vector<aegis::Candle> daily_candles = history_symbol_ == quote->symbol && !history_result_.candles.empty()
                 ? history_result_.candles
-                : aegis::BuildSyntheticCandles(*quote, 365);
+                : aegis::BuildSyntheticCandles(*quote, std::max(365, chart_days_));
+            chart_aggregation_ = std::clamp(chart_aggregation_, 0, 2);
+            const aegis::CandleAggregation chart_aggregation = aegis::NormalizeCandleAggregation(chart_aggregation_);
+            const std::vector<aegis::Candle> candles = aegis::AggregateCandles(daily_candles, chart_aggregation);
             const aegis::IndicatorSnapshot indicators = aegis::BuildIndicators(candles, FindExactQuote("SPY"), FindExactQuote("QQQ"));
             const std::vector<aegis::ScreenPreset> presets = aegis::BuildScreenPresets();
             chart_preset_ = std::clamp(chart_preset_, 0, std::max(0, static_cast<int>(presets.size()) - 1));
@@ -1007,12 +1166,52 @@ namespace
 
             SectionTitle((quote->symbol + " Chart Lab").c_str(), "Candles, indicators, backtests, filings, news, earnings, and explainable model checks.");
             ImGui::SetNextItemWidth(150.0f);
-            ImGui::SliderInt("Visible days", &chart_days_, 30, 365);
-            ImGui::SameLine();
-            ImGui::Checkbox("Volume", &show_chart_volume_);
+            bool chart_layout_changed = false;
+            if (ImGui::SliderInt("Visible days", &chart_days_, 30, 1260))
+            {
+                chart_days_ = std::clamp(chart_days_, 30, 1260);
+                chart_layout_changed = true;
+            }
+            const auto timeframe_button = [&](const char* label, int days) {
+                ImGui::SameLine();
+                if (SmallActionButton(label))
+                {
+                    chart_days_ = std::clamp(days, 30, 1260);
+                    chart_layout_changed = true;
+                }
+            };
+            timeframe_button("1M", 22);
+            timeframe_button("3M", 66);
+            timeframe_button("6M", 126);
+            timeframe_button("YTD", CurrentYtdTradingDays());
+            timeframe_button("1Y", 252);
+            timeframe_button("3Y", 756);
+            timeframe_button("5Y", 1260);
             ImGui::SameLine();
             TextMuted(history_status_.c_str());
+
+            bool indicator_layout_changed = false;
+            ImGui::SetNextItemWidth(120.0f);
+            const char* aggregation_names[] = { "Daily", "Weekly", "Monthly" };
+            if (ImGui::Combo("Interval", &chart_aggregation_, aggregation_names, IM_ARRAYSIZE(aggregation_names)))
+            {
+                chart_aggregation_ = std::clamp(chart_aggregation_, 0, 2);
+                chart_layout_changed = true;
+            }
             ImGui::SameLine();
+            TextMuted((std::to_string(static_cast<int>(daily_candles.size())) + " daily / " + std::to_string(static_cast<int>(candles.size())) + " " + aegis::CandleAggregationName(chart_aggregation) + " bars").c_str());
+            ImGui::SameLine();
+            indicator_layout_changed |= ImGui::Checkbox("Volume", &show_chart_volume_);
+            ImGui::SameLine();
+            indicator_layout_changed |= ImGui::Checkbox("Trend SMA/EMA", &show_trend_indicators_);
+            ImGui::SameLine();
+            indicator_layout_changed |= ImGui::Checkbox("Momentum RSI/MACD", &show_momentum_indicators_);
+            ImGui::SameLine();
+            indicator_layout_changed |= ImGui::Checkbox("Volatility BB/ATR", &show_volatility_indicators_);
+            ImGui::SameLine();
+            indicator_layout_changed |= ImGui::Checkbox("Relative SPY/QQQ", &show_relative_indicators_);
+            if (chart_layout_changed || indicator_layout_changed)
+                SaveSessionState();
             TextMuted(research_status_.c_str());
             ImGui::SameLine();
             ImGui::SetNextItemWidth(170.0f);
@@ -1066,15 +1265,34 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted(value.c_str());
                 };
-                row("SMA 20", aegis::FormatCurrency(indicators.sma20));
-                row("SMA 50", aegis::FormatCurrency(indicators.sma50));
-                row("EMA 12/26", aegis::FormatCurrency(indicators.ema12) + " / " + aegis::FormatCurrency(indicators.ema26));
-                row("RSI 14", aegis::FormatPercent(indicators.rsi14));
-                row("MACD", aegis::FormatCurrency(indicators.macd) + " / " + aegis::FormatCurrency(indicators.macd_signal));
-                row("Bollinger", aegis::FormatCurrency(indicators.bollinger_lower) + " - " + aegis::FormatCurrency(indicators.bollinger_upper));
-                row("ATR 14", aegis::FormatCurrency(indicators.atr14));
-                row("Drawdown", aegis::FormatPercent(indicators.drawdown));
-                row("Rel SPY/QQQ", aegis::FormatPercent(indicators.relative_spy) + " / " + aegis::FormatPercent(indicators.relative_qqq));
+                bool rendered_indicator = false;
+                if (show_trend_indicators_)
+                {
+                    rendered_indicator = true;
+                    row("SMA 20", aegis::FormatCurrency(indicators.sma20));
+                    row("SMA 50", aegis::FormatCurrency(indicators.sma50));
+                    row("EMA 12/26", aegis::FormatCurrency(indicators.ema12) + " / " + aegis::FormatCurrency(indicators.ema26));
+                }
+                if (show_momentum_indicators_)
+                {
+                    rendered_indicator = true;
+                    row("RSI 14", aegis::FormatPercent(indicators.rsi14));
+                    row("MACD", aegis::FormatCurrency(indicators.macd) + " / " + aegis::FormatCurrency(indicators.macd_signal));
+                }
+                if (show_volatility_indicators_)
+                {
+                    rendered_indicator = true;
+                    row("Bollinger", aegis::FormatCurrency(indicators.bollinger_lower) + " - " + aegis::FormatCurrency(indicators.bollinger_upper));
+                    row("ATR 14", aegis::FormatCurrency(indicators.atr14));
+                    row("Drawdown", aegis::FormatPercent(indicators.drawdown));
+                }
+                if (show_relative_indicators_)
+                {
+                    rendered_indicator = true;
+                    row("Rel SPY/QQQ", aegis::FormatPercent(indicators.relative_spy) + " / " + aegis::FormatPercent(indicators.relative_qqq));
+                }
+                if (!rendered_indicator)
+                    row("Indicators", "Disabled for this layout");
                 ImGui::EndTable();
             }
             ImGui::EndChild();
@@ -1120,7 +1338,7 @@ namespace
 
             ImGui::SameLine();
             ImGui::BeginChild("chart_lower_right", ImVec2(0, 0), true);
-            SectionTitle("Fundamentals");
+            SectionTitle("Fundamentals", quote->fundamentals_estimated ? "Estimated until provider-backed fundamentals sync." : "Provider-backed values where available.");
             if (ImGui::BeginTable("fundamentals_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Metric");
@@ -1313,6 +1531,8 @@ namespace
             ImGui::BeginChild("workflow_left", ImVec2(ImGui::GetContentRegionAvail().x * 0.47f, 0), true);
             RenderTodayFocus();
             ImGui::Spacing();
+            RenderNotificationCenter();
+            ImGui::Spacing();
             RenderWatchlistGroupsPanel();
             ImGui::Spacing();
             RenderScreenPresetsPanel();
@@ -1340,6 +1560,32 @@ namespace
             ImGui::TextWrapped("CSV pack uses holdings, alerts, alert-events, trade-plans, symbol-notes, and trade-journal CSV files in the app data folder.");
             ImGui::Spacing();
             RenderInfoTable("Import Preview", BuildImportPreviewRows());
+            if (!import_issues_.empty())
+            {
+                ImGui::Spacing();
+                SectionTitle("Last Import Issues");
+                if (ImGui::BeginTable("ImportIssues", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
+                {
+                    ImGui::TableSetupColumn("File");
+                    ImGui::TableSetupColumn("Row");
+                    ImGui::TableSetupColumn("Value");
+                    ImGui::TableSetupColumn("Reason");
+                    ImGui::TableHeadersRow();
+                    for (const ImportIssue& issue : import_issues_)
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(issue.file.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%d", issue.row);
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextWrapped("%s", issue.value.c_str());
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::TextWrapped("%s", issue.reason.c_str());
+                    }
+                    ImGui::EndTable();
+                }
+            }
             ImGui::Spacing();
             RenderBrokerImportPanel();
             ImGui::EndChild();
@@ -1399,7 +1645,13 @@ namespace
             ImGui::Spacing();
             RenderInfoTable("Provider Controls", aegis::BuildProviderControlRows(config_));
             ImGui::Spacing();
+            RenderInfoTable("Provider Capability Registry", aegis::BuildProviderCapabilityRows(config_));
+            ImGui::Spacing();
             RenderInfoTable("Cache Policy", aegis::BuildCachePolicyRows(config_));
+            ImGui::Spacing();
+            RenderInfoTable("Recent Provider Diagnostics", aegis::BuildProviderDiagnosticRows(6));
+            ImGui::Spacing();
+            RenderInfoTable("Rate-Limit Events", aegis::BuildProviderLimitRows(32));
             ImGui::Spacing();
             SectionTitle("Macro Dashboard");
             if (ImGui::BeginTable("macro_dashboard", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
@@ -1435,7 +1687,8 @@ namespace
             ImGui::Checkbox("Paper only mode", &config_.paper_only_mode);
             ImGui::Checkbox("Manual confirmation required", &config_.require_manual_confirmation);
             ImGui::Checkbox("Desktop notifications", &config_.notifications_enabled);
-            ImGui::Checkbox("Compact dashboard", &compact_mode_);
+            if (ImGui::Checkbox("Compact dashboard", &compact_mode_))
+                PersistUiPreferences("Compact dashboard preference saved.");
             ImGui::TextWrapped("Live order execution is disabled unless a future broker module explicitly enables it. Alpaca support is shaped for paper accounts first.");
             if (SmallActionButton("Save Guardrails"))
             {
@@ -1450,7 +1703,9 @@ namespace
             ImGui::TextWrapped("%s", validation_status_.c_str());
             ImGui::Separator();
             SectionTitle("Data Status");
-            DrawLabeledValue("Mode", state_.source_badge, state_.source_label);
+            const DataStatusSummary data_status = BuildDataStatusSummary();
+            DrawLabeledValue("Mode", data_status.label, data_status.detail);
+            RenderInfoTable("Data Status Breakdown", BuildDataStatusRows(data_status));
             DrawLabeledValue("Freshness", state_.last_refresh_label, state_.market_detail);
             DrawLabeledValue("Chart source", history_result_.source.empty() ? "Not loaded" : history_result_.source, history_result_.cache_age_label.empty() ? history_status_ : history_result_.cache_age_label);
             DrawLabeledValue("Research source", research_result_.source.empty() ? "Not loaded" : research_result_.source, research_result_.cache_age_label.empty() ? research_status_ : research_result_.cache_age_label);
@@ -1459,6 +1714,8 @@ namespace
             if (!research_result_.fallback_reason.empty())
                 DrawLabeledValue("Research fallback", research_result_.fallback_reason, "Fallback reason from latest research load.");
             DrawLabeledValue("Diagnostics", (aegis::AppDataDirectory() / "diagnostics.jsonl").string(), "Structured provider, rate-limit, cache, and error events.");
+            ImGui::Spacing();
+            RenderInfoTable("Background Tasks", BuildBackgroundTaskRows());
             ImGui::Spacing();
             RenderInfoTable("Storage Counts", aegis::BuildPersistentDataRows(CurrentPersistentData()));
             ImGui::Separator();
@@ -1512,7 +1769,10 @@ namespace
             {
                 SyncConfigFromBuffers();
                 if (aegis::SaveConfig(config_))
-                    status_ = "Settings saved.";
+                {
+                    const aegis::WatchlistLimitResult limits = aegis::ValidateWatchlistLimits(config_);
+                    status_ = limits.within_limit ? "Settings saved." : "Settings saved. " + limits.detail;
+                }
                 BeginRefresh(false);
                 Audit("settings_saved", "", "");
             }
@@ -1535,9 +1795,12 @@ namespace
             ImGui::InputText("Username", login_user_buffer_, sizeof(login_user_buffer_));
             ImGui::InputText("Password", login_password_buffer_, sizeof(login_password_buffer_), ImGuiInputTextFlags_Password);
             ImGui::Checkbox("Remember credentials", &remember_me_);
-            ImGui::Checkbox("Compact dashboard", &compact_mode_);
-            ImGui::Checkbox("High contrast mode", &config_.ui_high_contrast);
-            ImGui::SliderInt("Font scale", &config_.font_scale_percent, 85, 150);
+            if (ImGui::Checkbox("Compact dashboard", &compact_mode_))
+                PersistUiPreferences("Compact dashboard preference saved.");
+            if (ImGui::Checkbox("High contrast mode", &config_.ui_high_contrast))
+                PersistUiPreferences("High contrast preference saved.");
+            if (ImGui::SliderInt("Font scale", &config_.font_scale_percent, 85, 150))
+                PersistUiPreferences("Font scale preference saved.");
             if (SmallActionButton("Sign In"))
                 SignIn(true);
             ImGui::SameLine();
@@ -1572,6 +1835,10 @@ namespace
             }
             ImGui::Spacing();
             RenderInfoTable("Production Readiness", aegis::BuildProductionReadinessRows(config_));
+            ImGui::Spacing();
+            RenderInfoTable("Keyboard And Commands", BuildShortcutHelpRows());
+            ImGui::Spacing();
+            RenderInfoTable("Background Tasks", BuildBackgroundTaskRows());
             ImGui::Spacing();
             const std::vector<std::string> recent = aegis::LoadRecentDiagnosticLines(4);
             if (!recent.empty())
@@ -1684,12 +1951,17 @@ namespace
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(aegis::FormatVolume(quote->volume).c_str());
                 ImGui::TableNextColumn();
-                ImGui::TextUnformatted(aegis::FormatCompactCurrency(quote->market_cap).c_str());
+                std::string market_cap = aegis::FormatCompactCurrency(quote->market_cap);
+                if (quote->market_cap_estimated)
+                    market_cap += " est.";
+                ImGui::TextUnformatted(market_cap.c_str());
                 ImGui::EndTable();
             }
 
             ImGui::Spacing();
             RenderInfoTable("Signal Factors", signal->factors);
+            ImGui::Spacing();
+            RenderInfoTable("Data Quality", aegis::BuildQuoteDataQualityRows(*quote));
         }
 
         void RenderInfoTable(const char* title, const std::vector<aegis::InfoItem>& items)
@@ -1716,6 +1988,143 @@ namespace
                 }
                 ImGui::EndTable();
             }
+        }
+
+        std::vector<aegis::InfoItem> BuildBackgroundTaskRows() const
+        {
+            const auto row = [](const std::string& name, bool active, int request_id, const std::string& symbol, const std::string& status) {
+                aegis::InfoItem item;
+                item.name = name;
+                item.state = active ? "Running" : "Idle";
+                item.value = "#" + std::to_string(std::max(0, request_id));
+                item.detail = symbol.empty() ? status : symbol + ": " + status;
+                return item;
+            };
+            return {
+                row("Quote refresh", refresh_in_flight_, refresh_request_id_, "", status_),
+                row("API validation", validation_in_flight_, validation_request_id_, "", validation_status_),
+                row("History load", history_in_flight_, history_request_id_, history_request_symbol_, history_status_),
+                row("Research load", research_in_flight_, research_request_id_, research_request_symbol_, research_status_)
+            };
+        }
+
+        DataStatusSummary BuildDataStatusSummary() const
+        {
+            DataStatusSummary summary;
+            summary.freshness = state_.last_refresh_label.empty() ? "--" : state_.last_refresh_label;
+
+            const std::string combined = aegis::Lower(
+                state_.source_badge + " " +
+                state_.source_label + " " +
+                state_.market_status + " " +
+                state_.market_detail + " " +
+                status_ + " " +
+                validation_status_ + " " +
+                history_status_ + " " +
+                history_result_.source + " " +
+                history_result_.cache_age_label + " " +
+                history_result_.fallback_reason + " " +
+                research_status_ + " " +
+                research_result_.source + " " +
+                research_result_.cache_age_label + " " +
+                research_result_.fallback_reason);
+
+            const auto contains = [&](const std::string& needle) {
+                return combined.find(needle) != std::string::npos;
+            };
+            const bool has_rate_limit = contains("rate-limit") || contains("rate limit") || contains("api call frequency") || contains("provider-limit") || contains("limited");
+            const bool has_network_issue = contains("network error") || contains("timeout") || contains("could not connect") || contains("offline");
+            const bool demo = contains("demo") || state_.source_badge.find("Demo") != std::string::npos;
+            const bool cache = contains("cache") || history_result_.cached || research_result_.cached;
+            const bool stale = contains("stale") || contains("fallback") || !history_result_.fallback_reason.empty() || !research_result_.fallback_reason.empty();
+            const bool quote_live = state_.loaded_from_api && !demo && !state_.quotes.empty();
+
+            if (has_rate_limit)
+            {
+                summary.label = "Rate-limited";
+                summary.state = "Provider limit";
+                summary.color = V4(0.78f, 0.46f, 0.10f, 1.0f);
+                summary.detail = "A provider limit was detected. Aegis is using cache, fallback, or partial data where available.";
+            }
+            else if (has_network_issue)
+            {
+                summary.label = "Offline";
+                summary.state = "Network issue";
+                summary.color = V4(0.68f, 0.18f, 0.18f, 1.0f);
+                summary.detail = "Network/provider connectivity looks impaired. Decision panels should be treated as cache-only or demo until refresh succeeds.";
+            }
+            else if (demo)
+            {
+                summary.label = "Demo";
+                summary.state = "Research sample";
+                summary.color = V4(0.44f, 0.36f, 0.66f, 1.0f);
+                summary.detail = state_.source_label.empty() ? "Demo data is active." : state_.source_label;
+            }
+            else if (quote_live && (cache || stale))
+            {
+                summary.label = stale ? "Mixed stale" : "Mixed cache";
+                summary.state = stale ? "Live + fallback" : "Live + cache";
+                summary.color = stale ? V4(0.76f, 0.55f, 0.16f, 1.0f) : V4(0.14f, 0.48f, 0.62f, 1.0f);
+                summary.detail = "Quotes are live, while one or more research/chart panels are using cached or fallback data.";
+            }
+            else if (cache || stale)
+            {
+                summary.label = stale ? "Stale" : "Cache-only";
+                summary.state = stale ? "Fallback" : "Cache";
+                summary.color = stale ? V4(0.76f, 0.55f, 0.16f, 1.0f) : V4(0.14f, 0.48f, 0.62f, 1.0f);
+                summary.detail = stale ? "The current workspace is using stale or fallback provider data." : "The current workspace is using cached provider data.";
+            }
+            else if (quote_live)
+            {
+                summary.label = "Live";
+                summary.state = "Provider-backed";
+                summary.color = V4(0.08f, 0.48f, 0.24f, 1.0f);
+                summary.detail = state_.source_label.empty() ? "Live provider quote refresh is active." : state_.source_label;
+            }
+            else
+            {
+                summary.label = "Unknown";
+                summary.state = "Review";
+                summary.color = V4(0.42f, 0.48f, 0.52f, 1.0f);
+                summary.detail = "Data status has not been established yet. Refresh or check provider diagnostics.";
+            }
+
+            return summary;
+        }
+
+        std::vector<aegis::InfoItem> BuildDataStatusRows(const DataStatusSummary& summary) const
+        {
+            std::vector<aegis::InfoItem> rows = {
+                { "Workspace mode", summary.state, summary.label, "", summary.detail, "status", summary.state, state_.source_badge, summary.freshness },
+                { "Quote board", state_.loaded_from_api ? "Live attempt" : "Fallback", state_.source_badge, "", state_.source_label, "quotes", state_.loaded_from_api ? "Ready" : "Review", state_.source_badge, state_.last_refresh_label },
+                { "Market venue", state_.market_status.empty() ? "Unknown" : state_.market_status, summary.freshness, "", state_.market_detail, "market", state_.market_status.empty() ? "Review" : "Ready", state_.source_badge, state_.last_refresh_label },
+                { "Chart cache", history_result_.cached ? "Cached" : (history_result_.live ? "Live" : "Not loaded"), history_result_.cache_age_label.empty() ? history_status_ : history_result_.cache_age_label, "", history_result_.fallback_reason.empty() ? "No chart fallback reason from latest load." : history_result_.fallback_reason, "history", history_result_.fallback_reason.empty() ? "Ready" : "Review", history_result_.source, history_result_.fetched_at },
+                { "Research cache", research_result_.cached ? "Cached" : (research_result_.live ? "Live" : "Not loaded"), research_result_.cache_age_label.empty() ? research_status_ : research_result_.cache_age_label, "", research_result_.fallback_reason.empty() ? "No research fallback reason from latest load." : research_result_.fallback_reason, "research", research_result_.fallback_reason.empty() ? "Ready" : "Review", research_result_.source, research_result_.fetched_at }
+            };
+
+            const std::vector<aegis::InfoItem> limits = aegis::BuildProviderLimitRows(1);
+            if (!limits.empty())
+            {
+                aegis::InfoItem row = limits.front();
+                row.name = "Recent provider limit";
+                row.detail = row.detail.empty() ? "Most recent rate-limit diagnostic." : row.detail;
+                rows.push_back(std::move(row));
+            }
+            return rows;
+        }
+
+        std::vector<aegis::InfoItem> BuildShortcutHelpRows() const
+        {
+            return {
+                { "Ctrl+R", "Refresh", "Global", "", "Refresh quote data using the current provider/cache policy.", "keyboard", "Ready" },
+                { "Ctrl+A", "Alert draft", "Research", "", "Jump to Research and prefill the alert editor with the selected symbol.", "keyboard", "Ready" },
+                { "Ctrl+1..9", "Switch tab", "Navigation", "", "Open Dashboard through Integrations without leaving the keyboard.", "keyboard", "Ready" },
+                { "Ctrl+0", "Settings", "Navigation", "", "Open Settings.", "keyboard", "Ready" },
+                { "refresh", "Command", "Palette", "", "Refresh the board from the command box.", "command", "Ready" },
+                { "search MSFT", "Command", "Palette", "", "Select and add a ticker from the command box.", "command", "Ready" },
+                { "alert NVDA above 900", "Command", "Palette", "", "Create a saved price alert from the command box.", "command", "Ready" },
+                { "report / briefing", "Command", "Palette", "", "Export the selected research report or today's briefing.", "command", "Ready" }
+            };
         }
 
         void RenderEtfExposure(const std::string& symbol)
@@ -1937,11 +2346,15 @@ namespace
         void RenderAlertHistoryPanel()
         {
             SectionTitle("Alert Engine", "Persistent trigger history with acknowledge and snooze controls.");
-            if (ImGui::BeginTable("alert_events", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 220.0f)))
+            const int unread_alerts = aegis::CountUnreadAlertEvents(alert_events_);
+            ImGui::TextWrapped("%d unread alert%s. %s", unread_alerts, unread_alerts == 1 ? "" : "s", alert_monitor_status_.c_str());
+            if (ImGui::BeginTable("alert_events", 10, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 220.0f)))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 76.0f);
                 ImGui::TableSetupColumn("Rule", ImGuiTableColumnFlags_WidthFixed, 104.0f);
                 ImGui::TableSetupColumn("Observed", ImGuiTableColumnFlags_WidthFixed, 86.0f);
+                ImGui::TableSetupColumn("Current", ImGuiTableColumnFlags_WidthFixed, 86.0f);
+                ImGui::TableSetupColumn("Since", ImGuiTableColumnFlags_WidthFixed, 82.0f);
                 ImGui::TableSetupColumn("Triggered", ImGuiTableColumnFlags_WidthFixed, 118.0f);
                 ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 100.0f);
                 ImGui::TableSetupColumn("Snooze", ImGuiTableColumnFlags_WidthFixed, 92.0f);
@@ -1959,6 +2372,14 @@ namespace
                     ImGui::Text("%s %s", event.direction == "above" ? ">=" : "<=", aegis::FormatCurrency(event.trigger_price).c_str());
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted(aegis::FormatCurrency(event.observed_price).c_str());
+                    ImGui::TableNextColumn();
+                    const aegis::AlertOutcome outcome = aegis::AlertOutcomeForEvent(event, state_.quotes);
+                    ImGui::TextUnformatted(outcome.has_quote ? aegis::FormatCurrency(outcome.current_price).c_str() : "--");
+                    ImGui::TableNextColumn();
+                    if (outcome.has_quote)
+                        TextValueColored(outcome.change, aegis::FormatPercent(outcome.change_percent));
+                    else
+                        ImGui::TextUnformatted("--");
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted(event.triggered_at.c_str());
                     ImGui::TableNextColumn();
@@ -1990,6 +2411,89 @@ namespace
             }
             if (alert_events_.empty())
                 TextMuted("No alert triggers recorded yet.");
+        }
+
+        void RenderNotificationCenter()
+        {
+            SectionTitle("Notification Center", alert_monitor_status_.c_str());
+            const int unread_alerts = aegis::CountUnreadAlertEvents(alert_events_);
+            if (SmallActionButton("Check Now"))
+                EvaluateCustomAlerts("notification-center");
+            ImGui::SameLine();
+            ImGui::TextWrapped("%d unread", unread_alerts);
+
+            if (ImGui::BeginTable("notification_center", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 165.0f)))
+            {
+                ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 76.0f);
+                ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 88.0f);
+                ImGui::TableSetupColumn("Outcome", ImGuiTableColumnFlags_WidthFixed, 118.0f);
+                ImGui::TableSetupColumn("Triggered", ImGuiTableColumnFlags_WidthFixed, 118.0f);
+                ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+                ImGui::TableSetupColumn("Detail");
+                ImGui::TableHeadersRow();
+
+                int shown = 0;
+                for (int i = static_cast<int>(alert_events_.size()) - 1; i >= 0 && shown < 8; --i)
+                {
+                    aegis::AlertEvent& event = alert_events_[static_cast<size_t>(i)];
+                    if (event.acknowledged)
+                        continue;
+                    const aegis::AlertOutcome outcome = aegis::AlertOutcomeForEvent(event, state_.quotes);
+                    const std::string state = aegis::AlertEventState(event);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    if (ImGui::Selectable(event.symbol.c_str(), false, ImGuiSelectableFlags_SpanAllColumns))
+                    {
+                        selected_symbol_ = event.symbol;
+                        selected_tab_ = 4;
+                    }
+                    ImGui::TableNextColumn();
+                    TextValueColored(state == "Open" ? 1.0 : 0.0, state);
+                    ImGui::TableNextColumn();
+                    if (outcome.has_quote)
+                        TextValueColored(outcome.change, (outcome.label + " " + aegis::FormatPercent(outcome.change_percent)));
+                    else
+                        ImGui::TextUnformatted(outcome.label.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(event.triggered_at.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::PushID(event.id.c_str());
+                    if (SmallActionButton("Ack"))
+                    {
+                        aegis::AcknowledgeAlertEvent(event);
+                        aegis::SaveAlertEvents(alert_events_);
+                        status_ = event.symbol + " alert acknowledged.";
+                    }
+                    ImGui::SameLine();
+                    if (SmallActionButton("Snooze"))
+                    {
+                        aegis::SnoozeAlertEvent(event, 30);
+                        aegis::SaveAlertEvents(alert_events_);
+                        status_ = event.symbol + " alert snoozed for 30 minutes.";
+                    }
+                    ImGui::PopID();
+                    ImGui::TableNextColumn();
+                    ImGui::TextWrapped("%s", outcome.detail.c_str());
+                    ++shown;
+                }
+                if (shown == 0)
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted("Clear");
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted("0 unread");
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted("--");
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted("--");
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted("--");
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted("No open alert notifications.");
+                }
+                ImGui::EndTable();
+            }
         }
 
         void RenderConvictionHeatmap()
@@ -2373,25 +2877,24 @@ namespace
 
         void SaveJournalFromEditor()
         {
-            aegis::JournalEntry entry;
-            entry.time = selected_journal_index_ >= 0 && selected_journal_index_ < static_cast<int>(journal_entries_.size())
+            const std::string existing_time = selected_journal_index_ >= 0 && selected_journal_index_ < static_cast<int>(journal_entries_.size())
                 ? journal_entries_[static_cast<size_t>(selected_journal_index_)].time
                 : aegis::NowTimeLabel();
-            entry.symbol = aegis::Upper(aegis::Trim(journal_symbol_buffer_));
-            entry.action = aegis::Trim(journal_action_buffer_);
-            entry.reason = aegis::Trim(journal_reason_buffer_);
-            entry.exit_reason = aegis::Trim(journal_exit_buffer_);
-            entry.tags = aegis::Trim(journal_tags_buffer_);
-            entry.mistakes = aegis::Trim(journal_mistakes_buffer_);
-            entry.grade = aegis::Trim(journal_grade_buffer_);
-            entry.realized_pnl = journal_realized_pnl_;
-            if (entry.symbol.empty())
+            const aegis::JournalDraftResult draft = aegis::ValidateJournalDraft(existing_time,
+                journal_symbol_buffer_,
+                journal_action_buffer_,
+                journal_reason_buffer_,
+                journal_exit_buffer_,
+                journal_tags_buffer_,
+                journal_mistakes_buffer_,
+                journal_grade_buffer_,
+                journal_realized_pnl_);
+            if (!draft.ok)
             {
-                status_ = "Enter a symbol for the journal entry.";
+                status_ = "Journal rejected: " + draft.error;
                 return;
             }
-            if (entry.action.empty())
-                entry.action = "Review";
+            const aegis::JournalEntry entry = draft.row;
 
             if (selected_journal_index_ >= 0 && selected_journal_index_ < static_cast<int>(journal_entries_.size()))
                 journal_entries_[static_cast<size_t>(selected_journal_index_)] = entry;
@@ -2400,6 +2903,7 @@ namespace
                 journal_entries_.push_back(entry);
                 selected_journal_index_ = static_cast<int>(journal_entries_.size()) - 1;
             }
+            selected_symbol_ = entry.symbol;
             status_ = aegis::SaveJournalEntries(journal_entries_) ? "Journal entry saved." : "Could not save journal entries.";
             Audit("journal_saved", entry.symbol, entry.action + " " + entry.grade);
         }
@@ -2419,18 +2923,6 @@ namespace
         void Audit(const std::string& action, const std::string& symbol, const std::string& detail)
         {
             aegis::AppendAuditEvent({ username_.empty() ? "local" : username_, action, symbol, detail });
-        }
-
-        std::string CsvCell(const std::string& value) const
-        {
-            std::string escaped = value;
-            size_t pos = 0;
-            while ((pos = escaped.find('"', pos)) != std::string::npos)
-            {
-                escaped.insert(pos, 1, '"');
-                pos += 2;
-            }
-            return "\"" + escaped + "\"";
         }
 
         std::string DefaultCompareSymbols() const
@@ -2455,6 +2947,12 @@ namespace
             if (!session.compare_symbols.empty())
                 SetBuffer(compare_symbols_buffer_, sizeof(compare_symbols_buffer_), session.compare_symbols);
             chart_days_ = session.chart_days;
+            chart_aggregation_ = session.chart_aggregation;
+            show_chart_volume_ = session.show_chart_volume;
+            show_trend_indicators_ = session.show_trend_indicators;
+            show_momentum_indicators_ = session.show_momentum_indicators;
+            show_volatility_indicators_ = session.show_volatility_indicators;
+            show_relative_indicators_ = session.show_relative_indicators;
             if (!session.strategy_rule.empty())
                 SetBuffer(strategy_rule_buffer_, sizeof(strategy_rule_buffer_), session.strategy_rule);
         }
@@ -2466,6 +2964,12 @@ namespace
             session.selected_symbol = selected_symbol_;
             session.compare_symbols = compare_symbols_buffer_;
             session.chart_days = chart_days_;
+            session.chart_aggregation = chart_aggregation_;
+            session.show_chart_volume = show_chart_volume_;
+            session.show_trend_indicators = show_trend_indicators_;
+            session.show_momentum_indicators = show_momentum_indicators_;
+            session.show_volatility_indicators = show_volatility_indicators_;
+            session.show_relative_indicators = show_relative_indicators_;
             session.strategy_rule = strategy_rule_buffer_;
             aegis::SaveAppSessionState(session);
         }
@@ -2482,48 +2986,68 @@ namespace
             return data;
         }
 
-        std::vector<std::string> SplitCsvLine(const std::string& line) const
-        {
-            std::vector<std::string> cells;
-            std::string cell;
-            bool quoted = false;
-            for (size_t i = 0; i < line.size(); ++i)
-            {
-                const char c = line[i];
-                if (c == '"')
-                {
-                    if (quoted && i + 1 < line.size() && line[i + 1] == '"')
-                    {
-                        cell.push_back('"');
-                        ++i;
-                    }
-                    else
-                    {
-                        quoted = !quoted;
-                    }
-                }
-                else if (c == ',' && !quoted)
-                {
-                    cells.push_back(cell);
-                    cell.clear();
-                }
-                else
-                {
-                    cell.push_back(c);
-                }
-            }
-            cells.push_back(cell);
-            return cells;
-        }
-
         std::vector<aegis::InfoItem> BuildImportPreviewRows() const
         {
             const std::filesystem::path dir = aegis::AppDataDirectory();
-            const auto preview = [&](const char* file_name, int min_cells, const char* detail) {
+            const auto item_from_counts = [](const char* file_name, bool exists, int valid, int errors, const std::string& first_error, const char* detail) {
+                aegis::InfoItem item;
+                item.name = file_name;
+                item.state = exists ? (errors == 0 ? "Ready" : "Review") : "Missing";
+                item.value = exists ? (std::to_string(valid) + " valid, " + std::to_string(errors) + " rejected") : "--";
+                if (!exists)
+                {
+                    item.detail = "Place this file in the app data folder to import it.";
+                    return item;
+                }
+                item.detail = detail;
+                if (!first_error.empty())
+                    item.detail += " First issue: " + first_error;
+                return item;
+            };
+
+            const auto preview_watchlist = [&]() {
+                const char* file_name = "watchlist-import.csv";
                 std::ifstream file(dir / file_name);
+                if (!file)
+                    return item_from_counts(file_name, false, 0, 0, {}, "Ticker symbols, one per cell or comma-separated.");
+
                 int valid = 0;
                 int errors = 0;
+                std::string first_error;
+                std::string line;
+                while (std::getline(file, line))
+                {
+                    if (aegis::Trim(line).empty())
+                        continue;
+                    for (const std::string& cell : aegis::SplitCsvLine(line))
+                    {
+                        const std::string token = aegis::Trim(cell);
+                        if (token.empty() || aegis::Lower(token) == "symbol")
+                            continue;
+                        const aegis::SymbolValidationResult symbol = aegis::ValidateTickerSymbol(token);
+                        if (symbol.ok)
+                            ++valid;
+                        else
+                        {
+                            ++errors;
+                            if (first_error.empty())
+                                first_error = token + ": " + symbol.reason;
+                        }
+                    }
+                }
+                return item_from_counts(file_name, true, valid, errors, first_error, "Ticker symbols, one per cell or comma-separated.");
+            };
+
+            const auto preview = [&](const char* file_name, const char* detail, auto validate) {
+                std::ifstream file(dir / file_name);
+                if (!file)
+                    return item_from_counts(file_name, false, 0, 0, {}, detail);
+
+                int valid = 0;
+                int errors = 0;
+                int row_number = 1;
                 bool header = true;
+                std::string first_error;
                 std::string line;
                 while (std::getline(file, line))
                 {
@@ -2532,29 +3056,30 @@ namespace
                         header = false;
                         continue;
                     }
+                    ++row_number;
                     if (aegis::Trim(line).empty())
                         continue;
-                    const std::vector<std::string> cells = SplitCsvLine(line);
-                    if (static_cast<int>(cells.size()) >= min_cells && !aegis::Trim(cells[0]).empty())
+                    const std::vector<std::string> cells = aegis::SplitCsvLine(line);
+                    const std::string error = validate(cells);
+                    if (error.empty())
                         ++valid;
                     else
+                    {
                         ++errors;
+                        if (first_error.empty())
+                            first_error = "row " + std::to_string(row_number) + ": " + error;
+                    }
                 }
-                aegis::InfoItem item;
-                item.name = file_name;
-                item.state = file ? (errors == 0 ? "Ready" : "Review") : "Missing";
-                item.value = file ? std::to_string(valid) + " rows" : "--";
-                item.detail = file ? (std::string(detail) + (errors > 0 ? " Errors: " + std::to_string(errors) : "")) : "Place this file in the app data folder to import it.";
-                return item;
+                return item_from_counts(file_name, true, valid, errors, first_error, detail);
             };
 
             return {
-                preview("watchlist-import.csv", 1, "Ticker symbols, one per cell or comma-separated."),
-                preview("holdings-import.csv", 3, "symbol, shares, average_cost, optional note."),
-                preview("alerts-import.csv", 3, "symbol, trigger_price, above/below, optional enabled and note."),
-                preview("trade-plans-import.csv", 10, "created_at, symbol, rating, entry, stop, target, shares, risk, reward, status, thesis."),
-                preview("symbol-notes-import.csv", 3, "symbol, tags, note, optional updated_at."),
-                preview("trade-journal-import.csv", 8, "time, symbol, action, reason, exit_reason, tags, mistakes, grade, optional realized_pnl.")
+                preview_watchlist(),
+                preview("holdings-import.csv", "symbol, shares, average_cost, optional note.", [](const std::vector<std::string>& cells) { return aegis::ParseHoldingImportRow(cells).error; }),
+                preview("alerts-import.csv", "symbol, trigger_price, above/below, optional enabled and note.", [](const std::vector<std::string>& cells) { return aegis::ParseAlertImportRow(cells).error; }),
+                preview("trade-plans-import.csv", "created_at, symbol, rating, entry, stop, target, shares, risk, reward, status, thesis.", [](const std::vector<std::string>& cells) { return aegis::ParseTradePlanImportRow(cells).error; }),
+                preview("symbol-notes-import.csv", "symbol, tags, note, optional updated_at.", [](const std::vector<std::string>& cells) { return aegis::ParseSymbolNoteImportRow(cells).error; }),
+                preview("trade-journal-import.csv", "time, symbol, action, reason, exit_reason, tags, mistakes, grade, optional realized_pnl.", [](const std::vector<std::string>& cells) { return aegis::ParseJournalImportRow(cells).error; })
             };
         }
 
@@ -2680,37 +3205,37 @@ namespace
                 std::ofstream file(dir / "holdings-export.csv");
                 file << "symbol,shares,average_cost,note\n";
                 for (const aegis::PortfolioHolding& row : holdings_)
-                    file << CsvCell(row.symbol) << ',' << row.shares << ',' << row.average_cost << ',' << CsvCell(row.note) << '\n';
+                    file << aegis::CsvCell(row.symbol) << ',' << row.shares << ',' << row.average_cost << ',' << aegis::CsvCell(row.note) << '\n';
             }
             {
                 std::ofstream file(dir / "alerts-export.csv");
                 file << "symbol,trigger_price,direction,enabled,note\n";
                 for (const aegis::PriceAlert& row : price_alerts_)
-                    file << CsvCell(row.symbol) << ',' << row.trigger_price << ',' << CsvCell(row.above ? "above" : "below") << ',' << (row.enabled ? "true" : "false") << ',' << CsvCell(row.note) << '\n';
+                    file << aegis::CsvCell(row.symbol) << ',' << row.trigger_price << ',' << aegis::CsvCell(row.above ? "above" : "below") << ',' << (row.enabled ? "true" : "false") << ',' << aegis::CsvCell(row.note) << '\n';
             }
             {
                 std::ofstream file(dir / "alert-events-export.csv");
                 file << "id,alert_key,symbol,direction,trigger_price,observed_price,triggered_at,source,note,acknowledged,acknowledged_at,snoozed_until_epoch\n";
                 for (const aegis::AlertEvent& row : alert_events_)
-                    file << CsvCell(row.id) << ',' << CsvCell(row.alert_key) << ',' << CsvCell(row.symbol) << ',' << CsvCell(row.direction) << ',' << row.trigger_price << ',' << row.observed_price << ',' << CsvCell(row.triggered_at) << ',' << CsvCell(row.source) << ',' << CsvCell(row.note) << ',' << (row.acknowledged ? "true" : "false") << ',' << CsvCell(row.acknowledged_at) << ',' << row.snoozed_until_epoch << '\n';
+                    file << aegis::CsvCell(row.id) << ',' << aegis::CsvCell(row.alert_key) << ',' << aegis::CsvCell(row.symbol) << ',' << aegis::CsvCell(row.direction) << ',' << row.trigger_price << ',' << row.observed_price << ',' << aegis::CsvCell(row.triggered_at) << ',' << aegis::CsvCell(row.source) << ',' << aegis::CsvCell(row.note) << ',' << (row.acknowledged ? "true" : "false") << ',' << aegis::CsvCell(row.acknowledged_at) << ',' << row.snoozed_until_epoch << '\n';
             }
             {
                 std::ofstream file(dir / "trade-plans-export.csv");
                 file << "created_at,symbol,rating,entry,stop,target,shares,planned_risk,planned_reward,status,thesis\n";
                 for (const aegis::TradePlan& row : trade_plans_)
-                    file << CsvCell(row.created_at) << ',' << CsvCell(row.symbol) << ',' << CsvCell(row.rating) << ',' << row.entry << ',' << row.stop << ',' << row.target << ',' << row.shares << ',' << row.planned_risk << ',' << row.planned_reward << ',' << CsvCell(row.status) << ',' << CsvCell(row.thesis) << '\n';
+                    file << aegis::CsvCell(row.created_at) << ',' << aegis::CsvCell(row.symbol) << ',' << aegis::CsvCell(row.rating) << ',' << row.entry << ',' << row.stop << ',' << row.target << ',' << row.shares << ',' << row.planned_risk << ',' << row.planned_reward << ',' << aegis::CsvCell(row.status) << ',' << aegis::CsvCell(row.thesis) << '\n';
             }
             {
                 std::ofstream file(dir / "symbol-notes-export.csv");
                 file << "symbol,tags,note,updated_at\n";
                 for (const aegis::SymbolNote& row : symbol_notes_)
-                    file << CsvCell(row.symbol) << ',' << CsvCell(row.tags) << ',' << CsvCell(row.note) << ',' << CsvCell(row.updated_at) << '\n';
+                    file << aegis::CsvCell(row.symbol) << ',' << aegis::CsvCell(row.tags) << ',' << aegis::CsvCell(row.note) << ',' << aegis::CsvCell(row.updated_at) << '\n';
             }
             {
                 std::ofstream file(dir / "trade-journal-export.csv");
                 file << "time,symbol,action,reason,exit_reason,tags,mistakes,grade,realized_pnl\n";
                 for (const aegis::JournalEntry& row : journal_entries_)
-                    file << CsvCell(row.time) << ',' << CsvCell(row.symbol) << ',' << CsvCell(row.action) << ',' << CsvCell(row.reason) << ',' << CsvCell(row.exit_reason) << ',' << CsvCell(row.tags) << ',' << CsvCell(row.mistakes) << ',' << CsvCell(row.grade) << ',' << row.realized_pnl << '\n';
+                    file << aegis::CsvCell(row.time) << ',' << aegis::CsvCell(row.symbol) << ',' << aegis::CsvCell(row.action) << ',' << aegis::CsvCell(row.reason) << ',' << aegis::CsvCell(row.exit_reason) << ',' << aegis::CsvCell(row.tags) << ',' << aegis::CsvCell(row.mistakes) << ',' << aegis::CsvCell(row.grade) << ',' << row.realized_pnl << '\n';
             }
             status_ = "CSV pack exported.";
             Audit("export_csv_pack", "", dir.string());
@@ -2720,20 +3245,38 @@ namespace
         {
             const std::filesystem::path dir = aegis::AppDataDirectory();
             int imported = 0;
+            int rejected = 0;
+            import_issues_.clear();
+            const auto record_rejection = [&](const char* file_name, int row, const std::string& value, const std::string& reason) {
+                ++rejected;
+                if (import_issues_.size() < 25)
+                    import_issues_.push_back({ file_name, row, value, reason });
+            };
             {
-                std::ifstream file(dir / "watchlist-import.csv");
+                const char* file_name = "watchlist-import.csv";
+                std::ifstream file(dir / file_name);
                 if (file)
                 {
                     std::vector<std::string> symbols = aegis::SplitWatchlist(config_.watchlist);
                     std::string line;
+                    int row_number = 0;
                     while (std::getline(file, line))
                     {
-                        for (std::string cell : SplitCsvLine(line))
+                        ++row_number;
+                        for (std::string cell : aegis::SplitCsvLine(line))
                         {
-                            cell = aegis::Upper(aegis::Trim(cell));
-                            if (!cell.empty() && cell != "SYMBOL" && std::find(symbols.begin(), symbols.end(), cell) == symbols.end())
+                            cell = aegis::Trim(cell);
+                            if (cell.empty() || aegis::Lower(cell) == "symbol")
+                                continue;
+                            const aegis::SymbolValidationResult symbol = aegis::ValidateTickerSymbol(cell);
+                            if (!symbol.ok)
                             {
-                                symbols.push_back(cell);
+                                record_rejection(file_name, row_number, cell, symbol.reason);
+                                continue;
+                            }
+                            if (std::find(symbols.begin(), symbols.end(), symbol.symbol) == symbols.end())
+                            {
+                                symbols.push_back(symbol.symbol);
                                 ++imported;
                             }
                         }
@@ -2743,145 +3286,142 @@ namespace
                 }
             }
             {
-                std::ifstream file(dir / "holdings-import.csv");
+                const char* file_name = "holdings-import.csv";
+                std::ifstream file(dir / file_name);
                 std::string line;
                 bool header = true;
+                int row_number = 0;
                 while (std::getline(file, line))
                 {
+                    ++row_number;
                     if (header)
                     {
                         header = false;
                         continue;
                     }
-                    const std::vector<std::string> cells = SplitCsvLine(line);
-                    if (cells.size() < 3)
-                        continue;
-                    aegis::PortfolioHolding row;
-                    row.symbol = aegis::Upper(aegis::Trim(cells[0]));
-                    row.shares = std::atof(cells[1].c_str());
-                    row.average_cost = std::atof(cells[2].c_str());
-                    row.note = cells.size() > 3 ? cells[3] : "";
-                    if (!row.symbol.empty() && row.shares > 0.0)
+                    const std::vector<std::string> cells = aegis::SplitCsvLine(line);
+                    const aegis::HoldingImportResult parsed = aegis::ParseHoldingImportRow(cells);
+                    if (parsed.ok)
                     {
-                        holdings_.push_back(row);
+                        holdings_.push_back(parsed.row);
                         ++imported;
+                    }
+                    else if (!aegis::Trim(line).empty())
+                    {
+                        const std::string value = cells.empty() ? aegis::Trim(line) : aegis::Trim(cells.front());
+                        record_rejection(file_name, row_number, value, parsed.error);
                     }
                 }
             }
             {
-                std::ifstream file(dir / "alerts-import.csv");
+                const char* file_name = "alerts-import.csv";
+                std::ifstream file(dir / file_name);
                 std::string line;
                 bool header = true;
+                int row_number = 0;
                 while (std::getline(file, line))
                 {
+                    ++row_number;
                     if (header)
                     {
                         header = false;
                         continue;
                     }
-                    const std::vector<std::string> cells = SplitCsvLine(line);
-                    if (cells.size() < 3)
-                        continue;
-                    aegis::PriceAlert row;
-                    row.symbol = aegis::Upper(aegis::Trim(cells[0]));
-                    row.trigger_price = std::atof(cells[1].c_str());
-                    row.above = cells[2] != "below";
-                    row.enabled = cells.size() <= 3 || cells[3] != "false";
-                    row.note = cells.size() > 4 ? cells[4] : "";
-                    if (!row.symbol.empty() && row.trigger_price > 0.0)
+                    const std::vector<std::string> cells = aegis::SplitCsvLine(line);
+                    const aegis::AlertImportResult parsed = aegis::ParseAlertImportRow(cells);
+                    if (parsed.ok)
                     {
-                        price_alerts_.push_back(row);
+                        price_alerts_.push_back(parsed.row);
                         ++imported;
+                    }
+                    else if (!aegis::Trim(line).empty())
+                    {
+                        const std::string value = cells.empty() ? aegis::Trim(line) : aegis::Trim(cells.front());
+                        record_rejection(file_name, row_number, value, parsed.error);
                     }
                 }
             }
             {
-                std::ifstream file(dir / "trade-plans-import.csv");
+                const char* file_name = "trade-plans-import.csv";
+                std::ifstream file(dir / file_name);
                 std::string line;
                 bool header = true;
+                int row_number = 0;
                 while (std::getline(file, line))
                 {
+                    ++row_number;
                     if (header)
                     {
                         header = false;
                         continue;
                     }
-                    const std::vector<std::string> cells = SplitCsvLine(line);
-                    if (cells.size() < 10)
-                        continue;
-                    aegis::TradePlan row;
-                    row.created_at = cells[0].empty() ? aegis::NowTimeLabel() : cells[0];
-                    row.symbol = aegis::Upper(aegis::Trim(cells[1]));
-                    row.rating = cells[2];
-                    row.entry = std::atof(cells[3].c_str());
-                    row.stop = std::atof(cells[4].c_str());
-                    row.target = std::atof(cells[5].c_str());
-                    row.shares = std::atoi(cells[6].c_str());
-                    row.planned_risk = std::atof(cells[7].c_str());
-                    row.planned_reward = std::atof(cells[8].c_str());
-                    row.status = cells[9].empty() ? "Open" : cells[9];
-                    row.thesis = cells.size() > 10 ? cells[10] : "";
-                    if (!row.symbol.empty() && row.entry > 0.0 && row.shares > 0)
+                    const std::vector<std::string> cells = aegis::SplitCsvLine(line);
+                    const aegis::TradePlanImportResult parsed = aegis::ParseTradePlanImportRow(cells);
+                    if (parsed.ok)
                     {
-                        trade_plans_.push_back(row);
+                        trade_plans_.push_back(parsed.row);
                         ++imported;
+                    }
+                    else if (!aegis::Trim(line).empty())
+                    {
+                        const std::string value = cells.size() > 1 ? aegis::Trim(cells[1]) : aegis::Trim(line);
+                        record_rejection(file_name, row_number, value, parsed.error);
                     }
                 }
             }
             {
-                std::ifstream file(dir / "symbol-notes-import.csv");
+                const char* file_name = "symbol-notes-import.csv";
+                std::ifstream file(dir / file_name);
                 std::string line;
                 bool header = true;
+                int row_number = 0;
                 while (std::getline(file, line))
                 {
+                    ++row_number;
                     if (header)
                     {
                         header = false;
                         continue;
                     }
-                    const std::vector<std::string> cells = SplitCsvLine(line);
-                    if (cells.size() < 3)
-                        continue;
-                    aegis::SymbolNote row;
-                    row.symbol = aegis::Upper(aegis::Trim(cells[0]));
-                    row.tags = cells[1];
-                    row.note = cells[2];
-                    row.updated_at = cells.size() > 3 && !cells[3].empty() ? cells[3] : aegis::NowTimeLabel();
-                    if (!row.symbol.empty())
+                    const std::vector<std::string> cells = aegis::SplitCsvLine(line);
+                    const aegis::SymbolNoteImportResult parsed = aegis::ParseSymbolNoteImportRow(cells);
+                    if (parsed.ok)
                     {
-                        symbol_notes_.push_back(row);
+                        symbol_notes_.push_back(parsed.row);
                         ++imported;
+                    }
+                    else if (!aegis::Trim(line).empty())
+                    {
+                        const std::string value = cells.empty() ? aegis::Trim(line) : aegis::Trim(cells.front());
+                        record_rejection(file_name, row_number, value, parsed.error);
                     }
                 }
             }
             {
-                std::ifstream file(dir / "trade-journal-import.csv");
+                const char* file_name = "trade-journal-import.csv";
+                std::ifstream file(dir / file_name);
                 std::string line;
                 bool header = true;
+                int row_number = 0;
                 while (std::getline(file, line))
                 {
+                    ++row_number;
                     if (header)
                     {
                         header = false;
                         continue;
                     }
-                    const std::vector<std::string> cells = SplitCsvLine(line);
-                    if (cells.size() < 8)
-                        continue;
-                    aegis::JournalEntry row;
-                    row.time = cells[0].empty() ? aegis::NowTimeLabel() : cells[0];
-                    row.symbol = aegis::Upper(aegis::Trim(cells[1]));
-                    row.action = cells[2];
-                    row.reason = cells[3];
-                    row.exit_reason = cells[4];
-                    row.tags = cells[5];
-                    row.mistakes = cells[6];
-                    row.grade = cells[7];
-                    row.realized_pnl = cells.size() > 8 ? std::atof(cells[8].c_str()) : 0.0;
-                    if (!row.symbol.empty())
+                    const std::vector<std::string> cells = aegis::SplitCsvLine(line);
+                    const aegis::JournalImportResult parsed = aegis::ParseJournalImportRow(cells);
+                    if (parsed.ok)
                     {
-                        journal_entries_.push_back(row);
+                        journal_entries_.push_back(parsed.row);
                         ++imported;
+                    }
+                    else if (!aegis::Trim(line).empty())
+                    {
+                        const std::string value = cells.size() > 1 ? aegis::Trim(cells[1]) : aegis::Trim(line);
+                        record_rejection(file_name, row_number, value, parsed.error);
                     }
                 }
             }
@@ -2889,9 +3429,53 @@ namespace
             EnsureHoldingsInWatchlist();
             aegis::SavePersistentAppData(CurrentPersistentData());
             aegis::SaveConfig(config_);
-            status_ = imported > 0 ? "Imported CSV pack rows: " + std::to_string(imported) : "No import CSV files found.";
-            Audit("import_csv_pack", "", std::to_string(imported));
+            if (imported > 0 || rejected > 0)
+            {
+                status_ = "CSV import complete: " + std::to_string(imported) + " imported, " + std::to_string(rejected) + " rejected.";
+                if (!import_issues_.empty())
+                {
+                    const ImportIssue& first = import_issues_.front();
+                    status_ += " First issue: " + first.file + " row " + std::to_string(first.row) + " - " + first.reason;
+                }
+            }
+            else
+                status_ = "No import CSV files found.";
+            Audit("import_csv_pack", "", std::to_string(imported) + " imported, " + std::to_string(rejected) + " rejected");
             BeginRefresh(false);
+        }
+
+        void ExportSelectedReport()
+        {
+            const aegis::StockQuote* quote = FindExactQuote(selected_symbol_);
+            const aegis::StockSignal* signal = FindExactSignal(selected_symbol_);
+            if (quote == nullptr || signal == nullptr)
+            {
+                status_ = "Select a loaded symbol before exporting a research report.";
+                return;
+            }
+
+            std::vector<aegis::Candle> candles = history_symbol_ == quote->symbol && !history_result_.candles.empty()
+                ? history_result_.candles
+                : aegis::BuildSyntheticCandles(*quote, 365);
+            const aegis::IndicatorSnapshot indicators = aegis::BuildIndicators(candles, FindExactQuote("SPY"), FindExactQuote("QQQ"));
+            const std::vector<aegis::ScreenPreset> presets = aegis::BuildScreenPresets();
+            const int preset_index = std::clamp(chart_preset_, 0, std::max(0, static_cast<int>(presets.size()) - 1));
+            const aegis::BacktestResult backtest = aegis::RunSignalBacktest(candles, presets.empty() ? "Momentum" : presets[static_cast<size_t>(preset_index)].name);
+            const aegis::StrategyBacktestResult strategy_backtest = aegis::RunStrategyRuleBacktest(candles, strategy_rule_buffer_, strategy_fee_bps_, strategy_slippage_bps_);
+            const bool has_research = research_symbol_ == quote->symbol && research_result_.ok;
+            const aegis::FundamentalSnapshot fundamentals = has_research && !research_result_.fundamentals.symbol.empty()
+                ? research_result_.fundamentals
+                : aegis::BuildFundamentals(*quote);
+            const std::vector<aegis::FilingItem> filings = has_research && !research_result_.filings.empty()
+                ? research_result_.filings
+                : aegis::BuildFilings(quote->symbol);
+            const std::vector<aegis::NewsItem> news = has_research && !research_result_.news.empty()
+                ? research_result_.news
+                : aegis::BuildNews(quote->symbol);
+            const std::vector<aegis::EarningsItem> earnings = has_research && !research_result_.earnings.empty()
+                ? research_result_.earnings
+                : aegis::BuildEarnings(quote->symbol);
+            ExportResearchReport(*quote, *signal, indicators, backtest, strategy_backtest, fundamentals, filings, news, earnings);
         }
 
         void ExportResearchReport(const aegis::StockQuote& quote,
@@ -2985,15 +3569,135 @@ namespace
             std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
                 return static_cast<char>(std::tolower(c));
             });
+            const auto select_symbol = [&](const std::string& raw_symbol, bool add_to_watchlist) {
+                const aegis::SymbolValidationResult symbol = aegis::ValidateTickerSymbol(raw_symbol);
+                if (!symbol.ok)
+                {
+                    status_ = "Ticker rejected: " + symbol.reason;
+                    return false;
+                }
+                selected_symbol_ = symbol.symbol;
+                SetBuffer(symbol_buffer_, sizeof(symbol_buffer_), symbol.symbol);
+                if (add_to_watchlist)
+                {
+                    std::vector<std::string> symbols = aegis::SplitWatchlist(config_.watchlist);
+                    if (std::find(symbols.begin(), symbols.end(), symbol.symbol) == symbols.end())
+                    {
+                        symbols.push_back(symbol.symbol);
+                        config_.watchlist = aegis::JoinWatchlist(symbols);
+                        SetBuffer(watchlist_buffer_, sizeof(watchlist_buffer_), config_.watchlist);
+                        aegis::SaveConfig(config_);
+                        BeginRefresh(false);
+                    }
+                }
+                selected_tab_ = 4;
+                status_ = symbol.symbol + " selected from command palette.";
+                return true;
+            };
             if (lower == "refresh")
             {
                 BeginRefresh(false);
+                return;
+            }
+            if (lower == "settings" || lower == "open settings")
+            {
+                selected_tab_ = 9;
+                return;
+            }
+            if (lower == "alerts" || lower == "notifications" || lower == "open alerts")
+            {
+                selected_tab_ = 7;
+                return;
+            }
+            if (lower == "web" || lower == "open web")
+            {
+                aegis::OpenExternalUrl(aegis::JoinUrl(config_.auth_base_url, config_.website_path));
+                return;
+            }
+            if (lower == "briefing" || lower == "export briefing")
+            {
+                ExportDailyBriefing();
+                return;
+            }
+            if (lower == "report" || lower == "export report")
+            {
+                ExportSelectedReport();
                 return;
             }
             if (lower.rfind("add ", 0) == 0)
             {
                 SetBuffer(symbol_buffer_, sizeof(symbol_buffer_), command.substr(4));
                 AddSymbolFromBuffer();
+                return;
+            }
+            if (lower.rfind("search ", 0) == 0)
+            {
+                select_symbol(command.substr(7), true);
+                return;
+            }
+            if (lower.rfind("open ", 0) == 0)
+            {
+                select_symbol(command.substr(5), true);
+                return;
+            }
+            if (lower.rfind("ticker ", 0) == 0)
+            {
+                select_symbol(command.substr(7), true);
+                return;
+            }
+            if (lower.rfind("alert ", 0) == 0)
+            {
+                std::stringstream stream(command.substr(6));
+                std::vector<std::string> tokens;
+                std::string token;
+                while (stream >> token)
+                    tokens.push_back(token);
+                std::string symbol = selected_symbol_;
+                bool has_direction = false;
+                bool has_price = false;
+                bool above = true;
+                double price = 0.0;
+                for (const std::string& raw : tokens)
+                {
+                    const std::string t = aegis::Lower(raw);
+                    if (t == "above" || t == "over" || t == ">")
+                    {
+                        above = true;
+                        has_direction = true;
+                        continue;
+                    }
+                    if (t == "below" || t == "under" || t == "<")
+                    {
+                        above = false;
+                        has_direction = true;
+                        continue;
+                    }
+                    char* end = nullptr;
+                    const double parsed = std::strtod(raw.c_str(), &end);
+                    if (end != raw.c_str() && end != nullptr && *end == '\0')
+                    {
+                        price = parsed;
+                        has_price = price > 0.0;
+                        continue;
+                    }
+                    const aegis::SymbolValidationResult parsed_symbol = aegis::ValidateTickerSymbol(raw);
+                    if (parsed_symbol.ok)
+                        symbol = parsed_symbol.symbol;
+                }
+                if (!has_direction || !has_price)
+                {
+                    status_ = "Alert command needs a direction and price, like: alert NVDA above 900.";
+                    return;
+                }
+                selected_alert_index_ = -1;
+                alert_above_ = above;
+                alert_enabled_ = true;
+                alert_trigger_price_ = price;
+                SetBuffer(alert_symbol_buffer_, sizeof(alert_symbol_buffer_), symbol);
+                SetBuffer(alert_note_buffer_, sizeof(alert_note_buffer_), "Created from command palette.");
+                selected_symbol_ = symbol;
+                selected_tab_ = 4;
+                SaveAlertFromEditor();
                 return;
             }
             if (lower.rfind("tab ", 0) == 0)
@@ -3026,7 +3730,9 @@ namespace
                 SaveTradePlanFromWorksheet();
                 return;
             }
-            status_ = "Unknown command. Try refresh, add TICKER, tab NAME, note TEXT, or plan.";
+            if (select_symbol(command, true))
+                return;
+            status_ = "Unknown command. Try refresh, add TICKER, search TICKER, alert TICKER above PRICE, report, briefing, tab NAME, note TEXT, or plan.";
         }
 
         void HandleKeyboardShortcuts(ImGuiIO& io)
@@ -3053,24 +3759,21 @@ namespace
         void AddSymbolFromBuffer()
         {
             std::vector<std::string> symbols = aegis::SplitWatchlist(config_.watchlist);
-            std::string symbol = aegis::Upper(aegis::Trim(symbol_buffer_));
-            symbol.erase(std::remove_if(symbol.begin(), symbol.end(), [](unsigned char c) {
-                return std::isalnum(c) == 0 && c != '.' && c != '-';
-            }), symbol.end());
-            if (symbol.empty())
+            const aegis::SymbolValidationResult symbol = aegis::ValidateTickerSymbol(symbol_buffer_);
+            if (!symbol.ok)
             {
-                status_ = "Enter a ticker symbol first.";
+                status_ = "Ticker rejected: " + symbol.reason;
                 return;
             }
-            if (std::find(symbols.begin(), symbols.end(), symbol) == symbols.end())
-                symbols.push_back(symbol);
+            if (std::find(symbols.begin(), symbols.end(), symbol.symbol) == symbols.end())
+                symbols.push_back(symbol.symbol);
             config_.watchlist = aegis::JoinWatchlist(symbols);
             SetBuffer(watchlist_buffer_, sizeof(watchlist_buffer_), config_.watchlist);
             SetBuffer(symbol_buffer_, sizeof(symbol_buffer_), "");
             aegis::SaveConfig(config_);
-            selected_symbol_ = symbol;
+            selected_symbol_ = symbol.symbol;
             BeginRefresh(false);
-            Audit("watchlist_added", symbol, "");
+            Audit("watchlist_added", symbol.symbol, "");
         }
 
         void RemoveSelectedSymbol()
@@ -3096,6 +3799,8 @@ namespace
             input.sec_user_agent = sec_user_agent_buffer_;
             input.ui_light_theme = light_theme_;
             input.ui_compact_mode = compact_mode_;
+            input.ui_high_contrast = config_.ui_high_contrast;
+            input.font_scale_percent = config_.font_scale_percent;
             config_ = aegis::ApplySettingsInput(config_, input);
             aegis::SetHttpUserAgent(aegis::SecCompliantUserAgent(config_));
             SetBuffer(watchlist_buffer_, sizeof(watchlist_buffer_), config_.watchlist);
@@ -3103,12 +3808,34 @@ namespace
             SetBuffer(sec_user_agent_buffer_, sizeof(sec_user_agent_buffer_), config_.sec_user_agent);
         }
 
+        void ApplyActiveTheme()
+        {
+            if (light_theme_)
+                ApplyLightTheme();
+            else
+                ApplyTheme();
+            if (config_.ui_high_contrast)
+                ApplyHighContrastTheme(light_theme_);
+        }
+
+        void PersistUiPreferences(const std::string& saved_status)
+        {
+            config_.ui_light_theme = light_theme_;
+            config_.ui_compact_mode = compact_mode_;
+            config_.font_scale_percent = std::clamp(config_.font_scale_percent, 85, 150);
+            ApplyActiveTheme();
+            if (aegis::SaveConfig(config_))
+                status_ = saved_status;
+            else
+                status_ = "Could not save UI preferences.";
+        }
+
         void EnsureHoldingsInWatchlist()
         {
             std::vector<std::string> symbols = aegis::SplitWatchlist(config_.watchlist);
             bool changed = false;
             const auto add_symbol = [&](const std::string& raw_symbol) {
-                const std::string symbol = aegis::Upper(raw_symbol);
+                const std::string symbol = aegis::NormalizeTickerSymbol(raw_symbol);
                 if (symbol.empty())
                     return;
                 if (std::find(symbols.begin(), symbols.end(), symbol) == symbols.end())
@@ -3284,33 +4011,34 @@ namespace
 
         void SaveHoldingFromEditor()
         {
-            aegis::PortfolioHolding holding;
-            holding.symbol = aegis::Upper(aegis::Trim(holding_symbol_buffer_));
-            holding.symbol.erase(std::remove_if(holding.symbol.begin(), holding.symbol.end(), [](unsigned char c) {
-                return std::isalnum(c) == 0 && c != '.' && c != '-';
-            }), holding.symbol.end());
-            holding.shares = holding_shares_;
-            holding.average_cost = holding_average_cost_;
-            holding.note = aegis::Trim(holding_note_buffer_);
-            if (holding.symbol.empty() || holding.shares <= 0.0 || holding.average_cost < 0.0)
+            const aegis::HoldingDraftResult draft = aegis::ValidateHoldingDraft(holding_symbol_buffer_, holding_shares_, holding_average_cost_, holding_note_buffer_);
+            if (!draft.ok)
             {
-                status_ = "Enter a symbol, positive shares, and a valid average cost.";
+                status_ = "Holding rejected: " + draft.error;
                 return;
             }
+            const aegis::PortfolioHolding holding = draft.row;
+            const int duplicate_index = aegis::FindDuplicateHoldingIndex(holdings_, holding.symbol, selected_holding_index_);
 
             if (selected_holding_index_ >= 0 && selected_holding_index_ < static_cast<int>(holdings_.size()))
             {
-                holdings_[static_cast<size_t>(selected_holding_index_)] = holding;
+                if (duplicate_index >= 0)
+                {
+                    holdings_[static_cast<size_t>(duplicate_index)] = holding;
+                    holdings_.erase(holdings_.begin() + selected_holding_index_);
+                    selected_holding_index_ = duplicate_index > selected_holding_index_ ? duplicate_index - 1 : duplicate_index;
+                }
+                else
+                {
+                    holdings_[static_cast<size_t>(selected_holding_index_)] = holding;
+                }
             }
             else
             {
-                auto existing = std::find_if(holdings_.begin(), holdings_.end(), [&](const aegis::PortfolioHolding& row) {
-                    return aegis::Upper(row.symbol) == holding.symbol;
-                });
-                if (existing != holdings_.end())
+                if (duplicate_index >= 0)
                 {
-                    *existing = holding;
-                    selected_holding_index_ = static_cast<int>(std::distance(holdings_.begin(), existing));
+                    holdings_[static_cast<size_t>(duplicate_index)] = holding;
+                    selected_holding_index_ = duplicate_index;
                 }
                 else
                 {
@@ -3333,7 +4061,7 @@ namespace
 
             selected_symbol_ = holding.symbol;
             if (aegis::SavePortfolioHoldings(holdings_))
-                status_ = "Holding saved.";
+                status_ = duplicate_index >= 0 ? "Holding saved and duplicate merged." : "Holding saved.";
             else
                 status_ = "Could not save holdings.";
             Audit("holding_saved", holding.symbol, std::to_string(holding.shares) + " shares");
@@ -3384,29 +4112,40 @@ namespace
 
         void SaveAlertFromEditor()
         {
-            aegis::PriceAlert alert;
-            alert.symbol = aegis::Upper(aegis::Trim(alert_symbol_buffer_));
-            alert.symbol.erase(std::remove_if(alert.symbol.begin(), alert.symbol.end(), [](unsigned char c) {
-                return std::isalnum(c) == 0 && c != '.' && c != '-';
-            }), alert.symbol.end());
-            alert.trigger_price = alert_trigger_price_;
-            alert.above = alert_above_;
-            alert.enabled = alert_enabled_;
-            alert.note = aegis::Trim(alert_note_buffer_);
-            if (alert.symbol.empty() || alert.trigger_price <= 0.0)
+            const aegis::AlertDraftResult draft = aegis::ValidateAlertDraft(alert_symbol_buffer_, alert_trigger_price_, alert_above_, alert_enabled_, alert_note_buffer_);
+            if (!draft.ok)
             {
-                status_ = "Enter a symbol and positive alert price.";
+                status_ = "Alert rejected: " + draft.error;
                 return;
             }
+            const aegis::PriceAlert alert = draft.row;
+            const int duplicate_index = aegis::FindDuplicateAlertIndex(price_alerts_, alert, selected_alert_index_);
 
             if (selected_alert_index_ >= 0 && selected_alert_index_ < static_cast<int>(price_alerts_.size()))
             {
-                price_alerts_[static_cast<size_t>(selected_alert_index_)] = alert;
+                if (duplicate_index >= 0)
+                {
+                    price_alerts_[static_cast<size_t>(duplicate_index)] = alert;
+                    price_alerts_.erase(price_alerts_.begin() + selected_alert_index_);
+                    selected_alert_index_ = duplicate_index > selected_alert_index_ ? duplicate_index - 1 : duplicate_index;
+                }
+                else
+                {
+                    price_alerts_[static_cast<size_t>(selected_alert_index_)] = alert;
+                }
             }
             else
             {
-                price_alerts_.push_back(alert);
-                selected_alert_index_ = static_cast<int>(price_alerts_.size()) - 1;
+                if (duplicate_index >= 0)
+                {
+                    price_alerts_[static_cast<size_t>(duplicate_index)] = alert;
+                    selected_alert_index_ = duplicate_index;
+                }
+                else
+                {
+                    price_alerts_.push_back(alert);
+                    selected_alert_index_ = static_cast<int>(price_alerts_.size()) - 1;
+                }
             }
             std::sort(price_alerts_.begin(), price_alerts_.end(), [](const aegis::PriceAlert& a, const aegis::PriceAlert& b) {
                 if (a.symbol != b.symbol)
@@ -3424,7 +4163,7 @@ namespace
             }
             selected_symbol_ = alert.symbol;
             if (aegis::SavePriceAlerts(price_alerts_))
-                status_ = "Price alert saved.";
+                status_ = duplicate_index >= 0 ? "Price alert saved and duplicate merged." : "Price alert saved.";
             else
                 status_ = "Could not save price alerts.";
             Audit("alert_saved", alert.symbol, (alert.above ? "above " : "below ") + aegis::FormatCurrency(alert.trigger_price));
@@ -3530,44 +4269,24 @@ namespace
             return std::clamp(corr * (qv / bv), -3.0, 3.0);
         }
 
-        void EvaluateCustomAlerts()
+        void EvaluateCustomAlerts(const char* reason = "manual")
         {
             state_.alerts.erase(std::remove_if(state_.alerts.begin(), state_.alerts.end(), [](const aegis::InfoItem& item) {
                 return item.tag == "Custom";
             }), state_.alerts.end());
 
-            bool wrote_event = false;
-            for (const aegis::PriceAlert& alert : price_alerts_)
-            {
-                if (!alert.enabled)
-                    continue;
-                const aegis::StockQuote* quote = FindExactQuote(alert.symbol);
-                if (quote == nullptr || quote->price <= 0.0)
-                    continue;
-                const bool triggered = alert.above ? quote->price >= alert.trigger_price : quote->price <= alert.trigger_price;
-                if (!triggered)
-                    continue;
+            const aegis::AlertEvaluationResult evaluation = aegis::EvaluatePriceAlerts(price_alerts_, state_.quotes, alert_events_, state_.source_badge);
+            state_.alerts.insert(state_.alerts.end(), evaluation.rows.begin(), evaluation.rows.end());
+            last_alert_check_ = std::chrono::steady_clock::now();
+            alert_monitor_status_ = evaluation.summary;
 
-                const std::string direction = alert.above ? "above" : "below";
-                const bool suppressed = aegis::IsAlertEventSuppressed(alert, alert_events_);
-                state_.alerts.push_back({
-                    alert.symbol,
-                    suppressed ? "Custom price alert active" : "Custom price alert triggered",
-                    aegis::FormatCurrency(quote->price),
-                    "",
-                    alert.symbol + " is " + direction + " " + aegis::FormatCurrency(alert.trigger_price) + ". " + (suppressed ? "Existing event is open/snoozed. " : "New alert event recorded. ") + alert.note,
-                    "Custom",
-                    quote->source
-                });
-                if (!suppressed)
-                {
-                    alert_events_.push_back(aegis::MakeAlertEvent(alert, *quote));
-                    wrote_event = true;
-                    aegis::AppendDiagnosticEvent({ "info", "alert-engine", "trigger", alert.symbol, "triggered", direction + " " + aegis::FormatCurrency(alert.trigger_price), "", 0, 0, false });
-                }
-            }
-            if (wrote_event)
+            if (!evaluation.new_events.empty())
             {
+                for (const aegis::AlertEvent& event : evaluation.new_events)
+                {
+                    alert_events_.push_back(event);
+                    aegis::AppendDiagnosticEvent({ "info", "alert-engine", reason, event.symbol, "triggered", event.direction + " " + aegis::FormatCurrency(event.trigger_price), "", 0, 0, false });
+                }
                 std::sort(alert_events_.begin(), alert_events_.end(), [](const aegis::AlertEvent& a, const aegis::AlertEvent& b) {
                     return a.triggered_at < b.triggered_at;
                 });
@@ -3577,7 +4296,13 @@ namespace
 
         void RenderPriceAlertsPanel()
         {
-            SectionTitle("Custom Price Alerts", "Saved alerts are evaluated against the current quote board.");
+            SectionTitle("Custom Price Alerts", "Saved alerts are monitored on a schedule against the current quote board.");
+            TextMuted(alert_monitor_status_.c_str());
+            if (SmallActionButton("Check Alerts Now"))
+                EvaluateCustomAlerts("manual");
+            ImGui::SameLine();
+            const int unread_alerts = aegis::CountUnreadAlertEvents(alert_events_);
+            ImGui::TextWrapped("%d unread alert%s", unread_alerts, unread_alerts == 1 ? "" : "s");
             ImGui::SetNextItemWidth(95.0f);
             ImGui::InputText("Symbol##alert", alert_symbol_buffer_, sizeof(alert_symbol_buffer_));
             ImGui::SameLine();
@@ -3617,7 +4342,7 @@ namespace
                     const aegis::PriceAlert& alert = price_alerts_[static_cast<size_t>(i)];
                     const aegis::StockQuote* quote = FindExactQuote(alert.symbol);
                     const double last = quote != nullptr ? quote->price : 0.0;
-                    const bool triggered = alert.enabled && last > 0.0 && (alert.above ? last >= alert.trigger_price : last <= alert.trigger_price);
+                    const bool triggered = quote != nullptr && aegis::IsPriceAlertTriggered(alert, *quote);
                     const std::string rule = std::string(alert.above ? "> " : "< ") + aegis::FormatCurrency(alert.trigger_price);
 
                     ImGui::TableNextRow();
@@ -3759,43 +4484,32 @@ namespace
             if (quote == nullptr || signal == nullptr || worksheet_entry_ <= 0.0)
                 return false;
 
-            const double risk_dollars = config_.portfolio_cash * (config_.max_portfolio_risk_percent / 100.0);
-            const double price = std::max(0.01, worksheet_entry_);
-            double effective_stop = worksheet_stop_;
+            double atr14 = 0.0;
             if (sizing_mode_ == 3)
             {
                 const std::vector<aegis::Candle> candles = aegis::BuildSyntheticCandles(*quote, 90);
                 const aegis::IndicatorSnapshot indicators = aegis::BuildIndicators(candles, FindExactQuote("SPY"), FindExactQuote("QQQ"));
-                effective_stop = std::max(0.01, price - indicators.atr14 * 1.5);
+                atr14 = indicators.atr14;
             }
-            const double risk_per_share = std::max(0.01, price - effective_stop);
-            const int shares_by_risk = std::max(0, static_cast<int>(std::floor(risk_dollars / risk_per_share)));
-            const int shares_by_cap = std::max(0, static_cast<int>(std::floor(config_.max_position_amount / price)));
-            if (sizing_mode_ == 0)
-            {
-                shares = shares_by_cap;
-            }
-            else if (sizing_mode_ == 2)
-            {
-                const double volatility_divisor = std::clamp(quote->beta + std::fabs(quote->change_percent) / 6.0, 0.65, 2.50);
-                shares = std::min(shares_by_risk, std::max(0, static_cast<int>(std::floor((config_.max_position_amount / volatility_divisor) / price))));
-            }
-            else if (sizing_mode_ == 4)
-            {
-                const double reward_per_share = std::max(0.01, signal->target_price - price);
-                const double rr = reward_per_share / risk_per_share;
-                const double probability = std::clamp(0.38 + static_cast<double>(signal->score) / 300.0, 0.40, 0.68);
-                const double kelly = std::clamp((probability * rr - (1.0 - probability)) / std::max(0.01, rr), 0.0, 0.06);
-                shares = std::min(shares_by_risk, std::max(0, static_cast<int>(std::floor((config_.portfolio_cash * kelly) / price))));
-            }
-            else
-            {
-                shares = std::min(shares_by_risk, shares_by_cap);
-            }
-            notional = shares * worksheet_entry_;
-            planned_risk = shares * risk_per_share;
-            planned_reward = shares * std::max(0.0, signal->target_price - worksheet_entry_);
-            return shares > 0;
+
+            aegis::PositionSizingInput input;
+            input.mode = aegis::PositionSizingModeFromIndex(sizing_mode_);
+            input.portfolio_cash = config_.portfolio_cash;
+            input.max_position_amount = config_.max_position_amount;
+            input.max_portfolio_risk_percent = config_.max_portfolio_risk_percent;
+            input.entry = worksheet_entry_;
+            input.stop = worksheet_stop_;
+            input.target = signal->target_price;
+            input.beta = quote->beta;
+            input.change_percent = quote->change_percent;
+            input.score = signal->score;
+            input.atr14 = atr14;
+            const aegis::PositionSizingResult result = aegis::CalculatePositionSize(input);
+            shares = result.shares;
+            notional = result.notional;
+            planned_risk = result.planned_risk;
+            planned_reward = result.planned_reward;
+            return result.ok;
         }
 
         void SaveTradePlanFromWorksheet()
@@ -3830,13 +4544,19 @@ namespace
             plan.planned_reward = planned_reward;
             plan.thesis = signal->thesis;
             plan.status = "Open";
-            trade_plans_.push_back(plan);
+            const aegis::TradePlanDraftResult draft = aegis::ValidateTradePlanDraft(plan);
+            if (!draft.ok)
+            {
+                status_ = "Trade plan rejected: " + draft.error;
+                return;
+            }
+            trade_plans_.push_back(draft.row);
             selected_trade_plan_index_ = static_cast<int>(trade_plans_.size()) - 1;
             if (aegis::SaveTradePlans(trade_plans_))
                 status_ = quote->symbol + " trade plan saved.";
             else
                 status_ = "Could not save trade plan.";
-            Audit("trade_plan_saved", plan.symbol, plan.rating);
+            Audit("trade_plan_saved", draft.row.symbol, draft.row.rating);
             EnsureHoldingsInWatchlist();
             SetBuffer(watchlist_buffer_, sizeof(watchlist_buffer_), config_.watchlist);
             aegis::SaveConfig(config_);
@@ -4180,16 +4900,39 @@ namespace
                 BeginRefresh(false);
         }
 
+        void MaybeAlertMonitor()
+        {
+            int enabled_alerts = 0;
+            for (const aegis::PriceAlert& alert : price_alerts_)
+            {
+                if (alert.enabled)
+                    ++enabled_alerts;
+            }
+            if (enabled_alerts == 0)
+            {
+                alert_monitor_status_ = price_alerts_.empty() ? "Alert monitor idle: no saved alerts." : "Alert monitor idle: saved alerts are disabled.";
+                return;
+            }
+            const int interval = std::clamp(config_.refresh_seconds / 2, 30, 300);
+            const auto now = std::chrono::steady_clock::now();
+            if (last_alert_check_.time_since_epoch().count() != 0 &&
+                std::chrono::duration_cast<std::chrono::seconds>(now - last_alert_check_).count() < interval)
+                return;
+            EvaluateCustomAlerts("scheduled");
+        }
+
         void BeginValidation()
         {
             if (validation_in_flight_)
                 return;
             SyncConfigFromBuffers();
+            const int request_id = ++validation_request_id_;
             validation_in_flight_ = true;
             validation_status_ = "Validating Alpha Vantage key...";
             const std::string key = config_.alpha_vantage_api_key;
-            validation_future_ = std::async(std::launch::async, [key]() {
+            validation_future_ = std::async(std::launch::async, [request_id, key]() {
                 ValidationFutureResult result;
+                result.request_id = request_id;
                 result.validation = aegis::ValidateAlphaVantageKey(key);
                 result.status = result.validation.status + ": " + result.validation.detail;
                 return result;
@@ -4204,6 +4947,7 @@ namespace
                 return;
 
             ValidationFutureResult result;
+            result.request_id = validation_request_id_;
             try
             {
                 result = validation_future_.get();
@@ -4217,6 +4961,12 @@ namespace
                 result.status = "Validation failed by an unknown error.";
             }
             validation_in_flight_ = false;
+            if (result.request_id != validation_request_id_)
+            {
+                validation_status_ = "Ignored stale validation response.";
+                aegis::AppendDiagnosticEvent({ "info", "alpha-vantage", "validation", "", "stale", "Ignored stale validation response after a newer request.", "", 0, 0, false });
+                return;
+            }
             validation_status_ = result.status;
             aegis::AppendDiagnosticLine("alpha validation " + result.status);
         }
@@ -4225,14 +4975,16 @@ namespace
         {
             if (quote.symbol.empty())
                 return;
-            if (history_symbol_ == quote.symbol && !history_result_.candles.empty())
+            const int requested_days = std::clamp(chart_days_, 30, 1260);
+            if (history_symbol_ == quote.symbol && !history_result_.candles.empty() && history_requested_days_ >= requested_days)
                 return;
             if (history_in_flight_)
             {
-                if (history_request_symbol_ != quote.symbol)
+                if (history_request_symbol_ != quote.symbol || history_in_flight_days_ < requested_days)
                 {
                     ++history_request_id_;
                     history_request_symbol_ = quote.symbol;
+                    history_in_flight_days_ = requested_days;
                     history_status_ = "Queued " + quote.symbol + " candles; older response will be ignored.";
                 }
                 return;
@@ -4240,17 +4992,19 @@ namespace
 
             const int request_id = ++history_request_id_;
             history_request_symbol_ = quote.symbol;
+            history_in_flight_days_ = requested_days;
             history_symbol_.clear();
             history_result_ = {};
-            history_status_ = "Loading " + quote.symbol + " daily candles...";
+            history_status_ = "Loading " + quote.symbol + " daily candles (" + std::to_string(requested_days) + " days)...";
             const aegis::Config config = config_;
             const aegis::StockQuote request_quote = quote;
             history_in_flight_ = true;
-            history_future_ = std::async(std::launch::async, [request_id, config, request_quote]() {
+            history_future_ = std::async(std::launch::async, [request_id, requested_days, config, request_quote]() {
                 HistoryFutureResult wrapped;
                 wrapped.request_id = request_id;
+                wrapped.requested_days = requested_days;
                 wrapped.symbol = request_quote.symbol;
-                wrapped.result = aegis::LoadHistoricalCandles(config, request_quote, 420);
+                wrapped.result = aegis::LoadHistoricalCandles(config, request_quote, requested_days);
                 return wrapped;
             });
         }
@@ -4264,6 +5018,7 @@ namespace
 
             HistoryFutureResult wrapped;
             wrapped.request_id = history_request_id_;
+            wrapped.requested_days = history_in_flight_days_;
             wrapped.symbol = history_request_symbol_;
             try
             {
@@ -4283,12 +5038,15 @@ namespace
             history_in_flight_ = false;
             if (wrapped.request_id != history_request_id_ || (!wrapped.symbol.empty() && wrapped.symbol != history_request_symbol_))
             {
+                history_in_flight_days_ = 0;
                 history_status_ = "Ignored stale history response.";
                 aegis::AppendDiagnosticEvent({ "info", "history", "TIME_SERIES_DAILY", wrapped.symbol, "stale", "Ignored stale history response after symbol switch.", "", 0, 0, false });
                 return;
             }
             history_symbol_ = wrapped.symbol.empty() ? history_request_symbol_ : wrapped.symbol;
             history_result_ = std::move(wrapped.result);
+            history_requested_days_ = std::max(wrapped.requested_days, static_cast<int>(history_result_.candles.size()));
+            history_in_flight_days_ = 0;
             history_status_ = history_result_.status;
             if (!history_result_.status.empty())
                 aegis::AppendDiagnosticLine("history " + history_symbol_ + " " + history_result_.status);
@@ -4553,6 +5311,69 @@ namespace
         colors[ImGuiCol_PlotHistogram] = V4(0.05f, 0.58f, 0.30f, 1.0f);
         colors[ImGuiCol_PlotLines] = V4(0.05f, 0.38f, 0.70f, 1.0f);
         colors[ImGuiCol_TextSelectedBg] = V4(0.10f, 0.52f, 0.28f, 0.25f);
+    }
+
+    void ApplyHighContrastTheme(bool light_theme)
+    {
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.FrameBorderSize = 1.5f;
+        style.ChildBorderSize = 1.5f;
+        style.PopupBorderSize = 1.5f;
+        style.ScrollbarSize = 12.0f;
+        style.GrabMinSize = 14.0f;
+        style.FramePadding = ImVec2(12.0f, 9.0f);
+
+        ImVec4* colors = style.Colors;
+        if (light_theme)
+        {
+            colors[ImGuiCol_Text] = V4(0.0f, 0.0f, 0.0f, 1.0f);
+            colors[ImGuiCol_TextDisabled] = V4(0.22f, 0.22f, 0.22f, 1.0f);
+            colors[ImGuiCol_WindowBg] = V4(1.0f, 1.0f, 1.0f, 1.0f);
+            colors[ImGuiCol_ChildBg] = V4(0.98f, 0.99f, 1.0f, 1.0f);
+            colors[ImGuiCol_PopupBg] = V4(1.0f, 1.0f, 1.0f, 1.0f);
+            colors[ImGuiCol_Border] = V4(0.0f, 0.0f, 0.0f, 0.52f);
+            colors[ImGuiCol_Separator] = V4(0.0f, 0.0f, 0.0f, 0.46f);
+            colors[ImGuiCol_FrameBg] = V4(0.92f, 0.96f, 1.0f, 1.0f);
+            colors[ImGuiCol_FrameBgHovered] = V4(0.78f, 0.88f, 1.0f, 1.0f);
+            colors[ImGuiCol_FrameBgActive] = V4(0.64f, 0.78f, 0.96f, 1.0f);
+            colors[ImGuiCol_Header] = V4(0.78f, 0.88f, 1.0f, 1.0f);
+            colors[ImGuiCol_HeaderHovered] = V4(0.58f, 0.76f, 1.0f, 1.0f);
+            colors[ImGuiCol_HeaderActive] = V4(0.34f, 0.58f, 0.98f, 1.0f);
+            colors[ImGuiCol_Button] = V4(0.84f, 0.92f, 1.0f, 1.0f);
+            colors[ImGuiCol_ButtonHovered] = V4(0.62f, 0.78f, 1.0f, 1.0f);
+            colors[ImGuiCol_ButtonActive] = V4(0.38f, 0.62f, 1.0f, 1.0f);
+            colors[ImGuiCol_CheckMark] = V4(0.0f, 0.28f, 0.86f, 1.0f);
+            colors[ImGuiCol_SliderGrab] = V4(0.0f, 0.28f, 0.86f, 1.0f);
+            colors[ImGuiCol_TableHeaderBg] = V4(0.86f, 0.91f, 1.0f, 1.0f);
+            colors[ImGuiCol_TableRowBg] = V4(1.0f, 1.0f, 1.0f, 1.0f);
+            colors[ImGuiCol_TableRowBgAlt] = V4(0.92f, 0.96f, 1.0f, 1.0f);
+            colors[ImGuiCol_TextSelectedBg] = V4(0.20f, 0.52f, 1.0f, 0.32f);
+        }
+        else
+        {
+            colors[ImGuiCol_Text] = V4(1.0f, 1.0f, 1.0f, 1.0f);
+            colors[ImGuiCol_TextDisabled] = V4(0.72f, 0.74f, 0.78f, 1.0f);
+            colors[ImGuiCol_WindowBg] = V4(0.0f, 0.0f, 0.0f, 1.0f);
+            colors[ImGuiCol_ChildBg] = V4(0.02f, 0.025f, 0.03f, 1.0f);
+            colors[ImGuiCol_PopupBg] = V4(0.02f, 0.025f, 0.03f, 1.0f);
+            colors[ImGuiCol_Border] = V4(1.0f, 1.0f, 1.0f, 0.40f);
+            colors[ImGuiCol_Separator] = V4(1.0f, 1.0f, 1.0f, 0.34f);
+            colors[ImGuiCol_FrameBg] = V4(0.08f, 0.10f, 0.14f, 1.0f);
+            colors[ImGuiCol_FrameBgHovered] = V4(0.12f, 0.18f, 0.24f, 1.0f);
+            colors[ImGuiCol_FrameBgActive] = V4(0.18f, 0.26f, 0.35f, 1.0f);
+            colors[ImGuiCol_Header] = V4(0.08f, 0.28f, 0.46f, 1.0f);
+            colors[ImGuiCol_HeaderHovered] = V4(0.10f, 0.38f, 0.62f, 1.0f);
+            colors[ImGuiCol_HeaderActive] = V4(0.14f, 0.48f, 0.78f, 1.0f);
+            colors[ImGuiCol_Button] = V4(0.08f, 0.22f, 0.34f, 1.0f);
+            colors[ImGuiCol_ButtonHovered] = V4(0.10f, 0.34f, 0.54f, 1.0f);
+            colors[ImGuiCol_ButtonActive] = V4(0.16f, 0.44f, 0.70f, 1.0f);
+            colors[ImGuiCol_CheckMark] = V4(1.0f, 0.86f, 0.20f, 1.0f);
+            colors[ImGuiCol_SliderGrab] = V4(1.0f, 0.86f, 0.20f, 1.0f);
+            colors[ImGuiCol_TableHeaderBg] = V4(0.08f, 0.12f, 0.18f, 1.0f);
+            colors[ImGuiCol_TableRowBg] = V4(0.02f, 0.025f, 0.03f, 1.0f);
+            colors[ImGuiCol_TableRowBgAlt] = V4(0.06f, 0.07f, 0.09f, 1.0f);
+            colors[ImGuiCol_TextSelectedBg] = V4(0.10f, 0.42f, 0.82f, 0.45f);
+        }
     }
 
     HICON CreateAegisWindowIcon(int size)
@@ -4834,3 +5655,4 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 }
+
