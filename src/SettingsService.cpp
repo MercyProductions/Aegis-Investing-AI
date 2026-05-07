@@ -2,6 +2,7 @@
 
 #include "Platform.h"
 #include "ProviderLayer.h"
+#include "services/SafetyGate.h"
 #include "SymbolRules.h"
 
 #include <algorithm>
@@ -11,6 +12,7 @@ namespace aegis
     namespace
     {
         constexpr const char* kDefaultAuthBaseUrl = "http://127.0.0.1:8000";
+        constexpr const char* kDefaultWebsiteBaseUrl = "http://127.0.0.1:5176";
 
         std::string RowState(bool ok)
         {
@@ -23,10 +25,13 @@ namespace aegis
         config.watchlist = JoinWatchlist(SplitWatchlist(input.watchlist));
         config.alpha_vantage_api_key = Trim(input.alpha_vantage_api_key);
         config.auth_base_url = Trim(input.auth_base_url);
+        config.website_base_url = Trim(input.website_base_url);
         config.sec_user_agent = Trim(input.sec_user_agent);
 
         if (config.auth_base_url.empty())
             config.auth_base_url = kDefaultAuthBaseUrl;
+        if (config.website_base_url.empty())
+            config.website_base_url = kDefaultWebsiteBaseUrl;
         if (config.sec_user_agent.empty())
             config.sec_user_agent = SecCompliantUserAgent(config);
 
@@ -82,6 +87,7 @@ namespace aegis
         const bool has_watchlist = !symbols.empty();
         const bool has_key = !Trim(config.alpha_vantage_api_key).empty();
         const bool has_auth = !Trim(config.auth_base_url).empty();
+        const bool has_website = !Trim(config.website_base_url).empty();
         const std::string sec_agent = SecCompliantUserAgent(config);
         const bool sec_has_contact = sec_agent.find('@') != std::string::npos ||
             sec_agent.find("contact") != std::string::npos ||
@@ -91,16 +97,20 @@ namespace aegis
             config.research_cache_hours >= 1 &&
             config.max_cache_mb >= 25;
         const bool safety_ok = config.paper_only_mode && config.require_manual_confirmation;
+        const std::vector<InfoItem> safety_rows = BuildSafetyGateRows(config);
 
-        return {
+        std::vector<InfoItem> rows = {
             { "Watchlist", "Input", std::to_string(symbols.size()) + " symbol(s)", "", has_watchlist ? "Normalized and ready for provider refresh." : "Add at least one ticker before relying on refresh workflows.", "settings", RowState(has_watchlist) },
             { "Refresh cap", "Provider", limits.summary, "", limits.detail, "settings", RowState(limits.within_limit) },
             { "Symbol validation", "Input", invalid_tokens == 0 ? "Clean" : std::to_string(invalid_tokens) + " rejected", "", "Accepts US-style tickers with letters, numbers, dot, dash, optional $ prefix, and slash-to-dot normalization.", "settings", RowState(invalid_tokens == 0) },
             { "Alpha Vantage", "Provider", has_key ? "Configured" : "Missing", "", has_key ? "Direct quote/history/research refresh can use the saved key." : "Demo/cache fallback remains available, but live market data is limited.", "settings", RowState(has_key) },
             { "Auth bridge", "Local/website", has_auth ? config.auth_base_url : "Missing", "", "Used only for optional website bridge login.", "settings", RowState(has_auth) },
+            { "Web cockpit", "Standalone", has_website ? config.website_base_url : "Missing", "", "Open Web uses the bundled website project in this repository.", "settings", RowState(has_website) },
             { "SEC user agent", "Compliance", sec_has_contact ? "Contact present" : "Needs contact", "", sec_agent, "settings", RowState(sec_has_contact) },
             { "Cache policy", "Freshness", cache_ok ? "Configured" : "Review", "", "Quote/history/research TTL and max cache size are bounded before save.", "settings", RowState(cache_ok) },
             { "Safety", "Guardrails", safety_ok ? "Paper locked" : "Review", "", "Paper-only mode and manual confirmation should stay enabled for research workflows.", "settings", RowState(safety_ok) }
         };
+        rows.insert(rows.end(), safety_rows.begin(), safety_rows.end());
+        return rows;
     }
 }

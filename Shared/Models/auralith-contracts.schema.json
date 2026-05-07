@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://auralith.local/schemas/professional-platform-v1.json",
+  "title": "Auralith Shared Contracts",
+  "description": "Local-first shared model contracts used by desktop, core, web, reports, SDK, and plugin boundaries.",
+  "type": "object",
+  "definitions": {
+    "Freshness": {
+      "type": "string",
+      "enum": ["fresh", "delayed", "stale", "partial", "fallback", "failed"]
+    },
+    "AssetClass": {
+      "type": "string",
+      "enum": ["Equity", "ETF", "Crypto", "Forex", "Commodity", "Option", "Index", "Unknown"]
+    },
+    "Symbol": {
+      "type": "object",
+      "required": ["symbol", "assetClass", "currency"],
+      "properties": {
+        "symbol": { "type": "string" },
+        "assetClass": { "$ref": "#/definitions/AssetClass" },
+        "name": { "type": "string" },
+        "sector": { "type": "string" },
+        "currency": { "type": "string", "default": "USD" }
+      },
+      "additionalProperties": false
+    },
+    "Quote": {
+      "type": "object",
+      "required": ["symbol", "price", "provider", "fetchedAt", "freshness", "fallback"],
+      "properties": {
+        "symbol": { "type": "string" },
+        "price": { "type": "number" },
+        "changePercent": { "type": "number" },
+        "provider": { "type": "string" },
+        "fetchedAt": { "type": "string" },
+        "freshness": { "$ref": "#/definitions/Freshness" },
+        "fallback": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "Position": {
+      "type": "object",
+      "required": ["portfolioId", "symbol", "quantity", "averageCost"],
+      "properties": {
+        "portfolioId": { "type": "string" },
+        "symbol": { "type": "string" },
+        "quantity": { "type": "number" },
+        "averageCost": { "type": "number" },
+        "lastPrice": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "RiskEvent": {
+      "type": "object",
+      "required": ["severity", "riskState", "detail", "createdAt"],
+      "properties": {
+        "severity": { "type": "string", "enum": ["info", "warning", "elevated", "critical"] },
+        "riskState": { "type": "string", "enum": ["Healthy", "Caution", "Elevated", "Defensive", "Critical"] },
+        "detail": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ScannerOutput": {
+      "type": "object",
+      "required": ["symbol", "score", "confidence", "rating", "thesis"],
+      "properties": {
+        "symbol": { "type": "string" },
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "confidence": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "rating": { "type": "string" },
+        "thesis": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AISummary": {
+      "type": "object",
+      "required": ["scope", "summary", "confidence"],
+      "properties": {
+        "scope": { "type": "string", "enum": ["symbol", "portfolio", "strategy", "market", "session"] },
+        "summary": { "type": "string" },
+        "evidence": { "type": "array", "items": { "type": "string" } },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -48,6 +48,13 @@ namespace aegis
         std::string note;
         std::string data_quality;
         bool live = false;
+        std::string provider;
+        std::string fetched_at;
+        std::string freshness = "Fallback";
+        bool delayed = true;
+        bool fallback = true;
+        int data_confidence = 50;
+        std::string provider_error;
         std::vector<float> history;
     };
 
@@ -60,8 +67,23 @@ namespace aegis
         std::string horizon;
         int score = 50;
         int confidence = 50;
+        std::string setup_type = "No Paper Setup";
+        std::string entry_idea;
+        std::string invalidation;
+        double entry_price = 0.0;
+        double target1_price = 0.0;
+        double target2_price = 0.0;
         double target_price = 0.0;
         double stop_level = 0.0;
+        double trailing_stop_level = 0.0;
+        double resistance_level = 0.0;
+        double atr_value = 0.0;
+        double risk_reward = 0.0;
+        int risk_score = 50;
+        bool manual_confirmation_required = true;
+        bool paper_only = true;
+        std::string expected_sell_zone;
+        std::string exit_plan;
         double position_budget = 0.0;
         std::string upside;
         std::string downside;
@@ -121,7 +143,7 @@ namespace aegis
         std::vector<InfoItem> rules;
         std::vector<InfoItem> research;
         std::string insight_title = "Portfolio posture";
-        std::string insight_copy = "Aegis scores momentum, range, liquidity, and risk limits so the board can organize research without pretending to guarantee outcomes.";
+        std::string insight_copy = "Auralith scores momentum, range, liquidity, and risk limits so the board can organize research without pretending to guarantee outcomes.";
         std::string selected_symbol = "AAPL";
         std::string selected_signal = "Watch";
         std::vector<float> market_history = { 48, 51, 49, 55, 58, 57, 61, 64, 63 };

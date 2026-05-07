@@ -4,6 +4,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AegisStockBettingAI", "AegisStockBettingAI.vcxproj", "{67D7983D-F774-4672-86A1-329529ED8D3C}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AuralithCore", "AuralithCore.vcxproj", "{B9C73B50-578D-4F7B-9E52-2EC3AA65D1E4}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -14,6 +16,10 @@ Global
 		{67D7983D-F774-4672-86A1-329529ED8D3C}.Debug|x64.Build.0 = Debug|x64
 		{67D7983D-F774-4672-86A1-329529ED8D3C}.Release|x64.ActiveCfg = Release|x64
 		{67D7983D-F774-4672-86A1-329529ED8D3C}.Release|x64.Build.0 = Release|x64
+		{B9C73B50-578D-4F7B-9E52-2EC3AA65D1E4}.Debug|x64.ActiveCfg = Debug|x64
+		{B9C73B50-578D-4F7B-9E52-2EC3AA65D1E4}.Debug|x64.Build.0 = Debug|x64
+		{B9C73B50-578D-4F7B-9E52-2EC3AA65D1E4}.Release|x64.ActiveCfg = Release|x64
+		{B9C73B50-578D-4F7B-9E52-2EC3AA65D1E4}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

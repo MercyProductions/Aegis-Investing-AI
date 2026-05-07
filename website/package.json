@@ -1,0 +1,38 @@
+{
+  "name": "auralith-markets",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node ./node_modules/concurrently/dist/bin/concurrently.js -k -n API,WEB -c cyan,green \"node ./node_modules/tsx/dist/cli.mjs watch src/server/index.ts\" \"node ./node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5176\"",
+    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.server.json && node ./node_modules/vite/bin/vite.js build",
+    "start": "node dist/server/index.js",
+    "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.server.json --noEmit && node ./node_modules/typescript/bin/tsc -p tsconfig.client.json --noEmit",
+    "smoke": "node scripts/smoke.mjs",
+    "provider:test": "node scripts/provider-reliability.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "lightweight-charts": "^5.2.0",
+    "lucide-react": "^0.561.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-router-dom": "^7.15.0",
+    "ws": "^8.20.0",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.10.2",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.7"
+  }
+}

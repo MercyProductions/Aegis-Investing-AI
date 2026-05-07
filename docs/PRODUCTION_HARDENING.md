@@ -17,6 +17,8 @@ This app is now set up around a more durable core:
 - Compare mode and session restore: selected tab/symbol, compare basket, chart days, and strategy rule are restored between launches.
 - Release scripts: `scripts/build.ps1`, `scripts/test.ps1`, and `scripts/release.ps1` create repeatable builds and clean artifacts.
 - SQLite migration target: `docs/sqlite-schema-v1.sql` defines the local store schema for replacing TSV files.
+- Safety gate: `src/services/SafetyGate.*` centralizes paper-only, manual-confirmation, and live-execution lock status for native surfaces.
+- Background task manager: `src/services/BackgroundTaskManager.*` gives Integrations/Settings a single task-status row model for refresh, validation, cache, backup, migration, and web bridge work.
 
 Remaining high-value follow-up work:
 

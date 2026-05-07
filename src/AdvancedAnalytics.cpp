@@ -1345,7 +1345,7 @@ namespace aegis
     {
         const double seed = SeedValue(symbol);
         return {
-            {"Today", "Aegis News", symbol + " momentum brief", seed > 0.55 ? "Positive" : "Neutral", "News/sentiment provider slot. Alpha Vantage NEWS_SENTIMENT can populate this feed.", "https://www.alphavantage.co/documentation/"},
+            {"Today", "Auralith News", symbol + " momentum brief", seed > 0.55 ? "Positive" : "Neutral", "News/sentiment provider slot. Alpha Vantage NEWS_SENTIMENT can populate this feed.", "https://www.alphavantage.co/documentation/"},
             {"Today", "Market Desk", "Sector read-through for " + symbol, seed > 0.35 ? "Neutral" : "Negative", "Compare company move against sector and index peers before acting.", ""},
             {"This week", "Research Queue", symbol + " catalyst watch", "Watch", "Earnings, filings, macro releases, and unusual volume are treated as catalyst candidates.", ""}
         };
@@ -1371,7 +1371,7 @@ namespace aegis
         return {
             {"Alpha Vantage", Trim(config.alpha_vantage_api_key).empty() ? "Needs key" : "Configured", "Quotes, fundamentals, technical indicators, news, earnings, dividends.", "https://www.alphavantage.co/documentation/", !Trim(config.alpha_vantage_api_key).empty()},
             {"SEC EDGAR", "Ready", "Company submissions and XBRL companyfacts are public REST JSON feeds.", "https://www.sec.gov/edgar/sec-api-documentation", true},
-            {"Alpaca Paper", "Disabled", "Paper trading/account sync slot. Live trading remains disabled by design.", "https://docs.alpaca.markets/docs/trading/paper-trading/", false},
+            {"Alpaca Paper", "Disabled", "Paper account sync slot. Live execution remains disabled by design.", "https://docs.alpaca.markets/docs/trading/paper-trading/", false},
             {"FRED/Macro", "Provider slot", "Rates, CPI, unemployment, yield curve, and macro dashboard inputs.", "https://fred.stlouisfed.org/docs/api/fred/", false},
             {"OpenBB-style layer", "Designed", "Provider abstraction point for swapping quote/fundamental/news sources.", "https://docs.openbb.co/", false}
         };

@@ -247,6 +247,12 @@ namespace aegis
             quote.status = "Research";
             quote.note = "Sample quote for layout, scoring, and workflow until a market-data key is saved. Fundamentals and beta are estimated.";
             quote.data_quality = "Demo quote / estimated metrics";
+            quote.provider = quote.source;
+            quote.fetched_at = quote.timestamp;
+            quote.freshness = "Fallback";
+            quote.delayed = true;
+            quote.fallback = true;
+            quote.data_confidence = 55;
             quote.history = BuildHistory(quote.symbol, quote.price, quote.change_percent);
             return quote;
         }
@@ -262,6 +268,17 @@ namespace aegis
             if (!global.IsObject())
             {
                 quote.note = root["Note"].AsString(root["Information"].AsString("No quote payload returned."));
+                quote.timestamp = NowTimeLabel();
+                quote.source = "Alpha Vantage";
+                quote.status = "Provider notice";
+                quote.data_quality = "Provider error / no usable quote";
+                quote.provider = quote.source;
+                quote.fetched_at = quote.timestamp;
+                quote.freshness = "Error";
+                quote.delayed = true;
+                quote.fallback = true;
+                quote.data_confidence = 20;
+                quote.provider_error = quote.note;
                 return quote;
             }
 
@@ -290,41 +307,349 @@ namespace aegis
             quote.fundamentals_estimated = true;
             quote.note = "Price, range, volume, and previous close are from Alpha Vantage. Market cap, P/E, dividend yield, and beta are estimated until a fundamentals provider syncs.";
             quote.data_quality = "Live quote / estimated metrics";
+            quote.provider = quote.source;
+            quote.fetched_at = quote.timestamp;
+            quote.freshness = "Delayed";
+            quote.delayed = true;
+            quote.fallback = false;
+            quote.data_confidence = 78;
             quote.history = BuildHistory(quote.symbol, quote.price > 0.0 ? quote.price : 100.0, quote.change_percent);
             return quote;
         }
 
+        struct MomentumComponents
+        {
+            int trend = 50;
+            int volume = 50;
+            int oscillator = 50;
+            int breakout = 50;
+            int sector = 50;
+            int regime = 50;
+            int score = 50;
+            double sma20 = 0.0;
+            double sma50 = 0.0;
+            double roc5 = 0.0;
+            double roc20 = 0.0;
+            double roc60 = 0.0;
+            double rsi14 = 50.0;
+            double macd_histogram = 0.0;
+            double recent_high = 0.0;
+            double recent_low = 0.0;
+            double atr = 0.0;
+            bool breakout_confirmed = false;
+        };
+
+        std::vector<double> PriceSeries(const StockQuote& quote)
+        {
+            std::vector<double> values;
+            values.reserve(quote.history.size() + 3);
+            if (quote.previous_close > 0.0)
+                values.push_back(quote.previous_close);
+            for (const float value : quote.history)
+            {
+                if (std::isfinite(value) && value > 0.0f)
+                    values.push_back(static_cast<double>(value));
+            }
+            if (quote.price > 0.0)
+            {
+                if (values.empty() || std::fabs(values.back() - quote.price) > 0.0001)
+                    values.push_back(quote.price);
+            }
+            if (values.empty())
+                values.push_back(1.0);
+            return values;
+        }
+
+        double AverageWindow(const std::vector<double>& values, size_t count, size_t offset_from_end = 0)
+        {
+            if (values.empty())
+                return 0.0;
+            const size_t end = values.size() > offset_from_end ? values.size() - offset_from_end : 0;
+            if (end == 0)
+                return values.front();
+            const size_t start = count >= end ? 0 : end - count;
+            double sum = 0.0;
+            for (size_t i = start; i < end; ++i)
+                sum += values[i];
+            return sum / static_cast<double>(end - start);
+        }
+
+        double HighWindowBeforeLast(const std::vector<double>& values, size_t count)
+        {
+            if (values.size() <= 1)
+                return values.empty() ? 0.0 : values.front();
+            const size_t end = values.size() - 1;
+            const size_t start = count >= end ? 0 : end - count;
+            double high = values[start];
+            for (size_t i = start + 1; i < end; ++i)
+                high = std::max(high, values[i]);
+            return high;
+        }
+
+        double LowWindow(const std::vector<double>& values, size_t count)
+        {
+            if (values.empty())
+                return 0.0;
+            const size_t start = count >= values.size() ? 0 : values.size() - count;
+            double low = values[start];
+            for (size_t i = start + 1; i < values.size(); ++i)
+                low = std::min(low, values[i]);
+            return low;
+        }
+
+        double RateOfChange(const std::vector<double>& values, size_t lookback)
+        {
+            if (values.size() <= 1)
+                return 0.0;
+            const size_t last = values.size() - 1;
+            const size_t index = lookback >= values.size() ? 0 : last - lookback;
+            const double base = values[index];
+            return base > 0.0 ? ((values.back() - base) / base) * 100.0 : 0.0;
+        }
+
+        double Rsi14(const std::vector<double>& values)
+        {
+            if (values.size() < 2)
+                return 50.0;
+            const size_t periods = std::min<size_t>(14, values.size() - 1);
+            double gains = 0.0;
+            double losses = 0.0;
+            for (size_t i = values.size() - periods; i < values.size(); ++i)
+            {
+                const double delta = values[i] - values[i - 1];
+                if (delta >= 0.0)
+                    gains += delta;
+                else
+                    losses -= delta;
+            }
+            const double average_gain = gains / static_cast<double>(periods);
+            const double average_loss = losses / static_cast<double>(periods);
+            if (average_loss <= 0.000001)
+                return average_gain > 0.0 ? 99.0 : 50.0;
+            const double rs = average_gain / average_loss;
+            return 100.0 - (100.0 / (1.0 + rs));
+        }
+
+        double MacdHistogram(const std::vector<double>& values)
+        {
+            if (values.empty())
+                return 0.0;
+            const double alpha12 = 2.0 / 13.0;
+            const double alpha26 = 2.0 / 27.0;
+            const double alpha9 = 2.0 / 10.0;
+            double ema12 = values.front();
+            double ema26 = values.front();
+            double signal = 0.0;
+            bool seeded = false;
+            double macd = 0.0;
+            for (const double value : values)
+            {
+                ema12 = ema12 + alpha12 * (value - ema12);
+                ema26 = ema26 + alpha26 * (value - ema26);
+                macd = ema12 - ema26;
+                if (!seeded)
+                {
+                    signal = macd;
+                    seeded = true;
+                }
+                else
+                {
+                    signal = signal + alpha9 * (macd - signal);
+                }
+            }
+            return macd - signal;
+        }
+
+        double AverageTrueRangeProxy(const StockQuote& quote, const std::vector<double>& values)
+        {
+            if (values.empty())
+                return 0.0;
+
+            const size_t periods = std::min<size_t>(14, values.size() > 1 ? values.size() - 1 : 0);
+            double total = 0.0;
+            int samples = 0;
+            for (size_t i = values.size() > periods ? values.size() - periods : 1; i < values.size(); ++i)
+            {
+                if (i == 0)
+                    continue;
+                total += std::fabs(values[i] - values[i - 1]);
+                ++samples;
+            }
+
+            const double close_to_close = samples > 0 ? total / static_cast<double>(samples) : values.back() * 0.02;
+            const double current_range = quote.high > quote.low && quote.low > 0.0 ? quote.high - quote.low : 0.0;
+            const double proxy = current_range > 0.0 ? std::max(close_to_close, current_range * 0.55) : close_to_close;
+            return std::max(values.back() * 0.003, proxy);
+        }
+
+        std::string FormatRatio(double value)
+        {
+            char buffer[32];
+            std::snprintf(buffer, sizeof(buffer), "%.1fR", value);
+            return buffer;
+        }
+
+        int BuildRiskScore(const StockQuote& quote, double entry_price, double stop_level)
+        {
+            const double range = quote.price > 0.0 ? ((quote.high - quote.low) / quote.price) * 100.0 : 0.0;
+            const double stop_distance = entry_price > 0.0 ? ((entry_price - stop_level) / entry_price) * 100.0 : 0.0;
+            int risk = 24;
+            risk += static_cast<int>(std::round(range * 5.5));
+            risk += static_cast<int>(std::round(std::max(0.0, quote.beta - 1.0) * 20.0));
+            risk += static_cast<int>(std::round(stop_distance * 2.0));
+            risk += DataConfidencePenalty(quote) / 2;
+            if (quote.fallback)
+                risk += 8;
+            return ClampInt(risk, 5, 95);
+        }
+
+        std::string RiskLabelForScore(int risk_score)
+        {
+            if (risk_score >= 72)
+                return "High";
+            if (risk_score >= 50)
+                return "Medium";
+            return "Lower";
+        }
+
+        MomentumComponents BuildMomentumComponents(const StockQuote& quote)
+        {
+            MomentumComponents components;
+            const std::vector<double> prices = PriceSeries(quote);
+            const double price = quote.price > 0.0 ? quote.price : prices.back();
+            components.sma20 = AverageWindow(prices, 20);
+            components.sma50 = AverageWindow(prices, 50);
+            const double prior_sma50 = AverageWindow(prices, 50, std::min<size_t>(5, prices.size() > 1 ? prices.size() - 1 : 0));
+            components.roc5 = RateOfChange(prices, 5);
+            components.roc20 = RateOfChange(prices, 20);
+            components.roc60 = RateOfChange(prices, 60);
+            components.rsi14 = Rsi14(prices);
+            components.macd_histogram = MacdHistogram(prices);
+            components.recent_high = HighWindowBeforeLast(prices, 30);
+            components.recent_low = LowWindow(prices, 12);
+            components.atr = AverageTrueRangeProxy(quote, prices);
+            components.breakout_confirmed = components.recent_high > 0.0 && price > components.recent_high * 1.001 && quote.volume > 1000000;
+
+            int trend = 42;
+            if (price > components.sma20 && components.sma20 > 0.0)
+                trend += 16;
+            else
+                trend -= 10;
+            if (price > components.sma50 && components.sma50 > 0.0)
+                trend += 15;
+            else
+                trend -= 8;
+            if (components.sma20 > components.sma50 && components.sma50 > 0.0)
+                trend += 12;
+            if (components.sma50 >= prior_sma50 && prior_sma50 > 0.0)
+                trend += 8;
+            if (components.roc5 > 0.0)
+                trend += 5;
+            if (components.roc20 > 0.0)
+                trend += 5;
+            components.trend = ClampInt(trend, 0, 100);
+
+            int volume = 38;
+            if (quote.volume > 50000000)
+                volume += 34;
+            else if (quote.volume > 25000000)
+                volume += 27;
+            else if (quote.volume > 10000000)
+                volume += 20;
+            else if (quote.volume > 2500000)
+                volume += 12;
+            else if (quote.volume > 750000)
+                volume += 6;
+            if (quote.change_percent > 0.0)
+                volume += 9;
+            if (quote.price > quote.open && quote.open > 0.0)
+                volume += 6;
+            if (quote.change_percent < 0.0)
+                volume -= 8;
+            components.volume = ClampInt(volume, 0, 100);
+
+            int oscillator = 48;
+            if (components.rsi14 >= 50.0 && components.rsi14 <= 70.0)
+                oscillator += 22;
+            else if (components.rsi14 > 70.0 && components.rsi14 <= 75.0)
+                oscillator += 8;
+            else if (components.rsi14 > 75.0)
+                oscillator -= 14;
+            else if (components.rsi14 < 40.0)
+                oscillator -= 18;
+            if (components.macd_histogram > 0.0)
+                oscillator += 16;
+            else
+                oscillator -= 10;
+            if (components.roc5 > 0.0 && components.roc20 > 0.0)
+                oscillator += 6;
+            components.oscillator = ClampInt(oscillator, 0, 100);
+
+            int breakout = 42;
+            if (components.breakout_confirmed)
+                breakout += 34;
+            else if (components.recent_high > 0.0 && price >= components.recent_high * 0.985)
+                breakout += 14;
+            if (components.volume >= 70)
+                breakout += 8;
+            if (quote.change_percent > 1.0)
+                breakout += 6;
+            if (price < components.sma20 && components.sma20 > 0.0)
+                breakout -= 10;
+            components.breakout = ClampInt(breakout, 0, 100);
+
+            int sector = 52;
+            if (!quote.sector.empty() && quote.sector != "Watchlist")
+                sector += 4;
+            if ((ContainsWord(quote.sector, "Technology") || ContainsWord(quote.sector, "Semiconductor") || ContainsWord(quote.sector, "Growth")) && quote.change_percent > 0.0)
+                sector += 9;
+            if (quote.change_percent < -1.0)
+                sector -= 10;
+            if (quote.beta > 1.7)
+                sector -= 6;
+            components.sector = ClampInt(sector, 0, 100);
+
+            const double intraday_range = price > 0.0 ? ((quote.high - quote.low) / price) * 100.0 : 0.0;
+            int regime = 55;
+            if (quote.change_percent > 0.75)
+                regime += 10;
+            if (quote.change_percent < -0.75)
+                regime -= 12;
+            if (intraday_range > 5.0)
+                regime -= 10;
+            if (quote.beta > 1.6)
+                regime -= 7;
+            if (quote.symbol == "SPY" || quote.symbol == "QQQ")
+                regime += 5;
+            components.regime = ClampInt(regime, 0, 100);
+
+            const int weighted =
+                (components.trend * 25) +
+                (components.volume * 20) +
+                (components.oscillator * 20) +
+                (components.breakout * 15) +
+                (components.sector * 10) +
+                (components.regime * 10);
+            components.score = ClampInt(static_cast<int>(std::round(static_cast<double>(weighted) / 100.0)), 0, 100);
+            return components;
+        }
+
         int BuildScore(const StockQuote& quote)
         {
-            const double intraday_range = quote.price > 0.0 ? ((quote.high - quote.low) / quote.price) * 100.0 : 0.0;
-            int score = 50;
-            score += static_cast<int>(std::round(quote.change_percent * 4.0));
-            if (quote.price > quote.open && quote.open > 0.0)
-                score += 5;
-            if (quote.price > quote.previous_close && quote.previous_close > 0.0)
-                score += 4;
-            if (quote.volume > 25000000)
-                score += 4;
-            if (intraday_range > 4.5)
-                score -= 6;
-            if (quote.beta > 1.55)
-                score -= 4;
-            if (quote.symbol == "SPY" || quote.symbol == "QQQ")
-                score += 2;
-            return ClampInt(score, 15, 95);
+            return BuildMomentumComponents(quote).score;
         }
 
         std::string RatingForScore(int score)
         {
-            if (score >= 76)
-                return "Accumulate";
-            if (score >= 64)
-                return "Watch Buy";
-            if (score >= 50)
-                return "Hold";
-            if (score >= 38)
-                return "Wait";
-            return "Trim Risk";
+            if (score >= 90)
+                return "High-conviction paper setup";
+            if (score >= 75)
+                return "Strong paper setup";
+            if (score >= 60)
+                return "Watchlist setup";
+            if (score >= 40)
+                return "Neutral research";
+            return "Weak momentum";
         }
 
         std::string RiskForQuote(const StockQuote& quote)
@@ -339,40 +664,93 @@ namespace aegis
 
         StockSignal BuildSignal(const StockQuote& quote, const Config& config)
         {
+            const MomentumComponents components = BuildMomentumComponents(quote);
             StockSignal signal;
             signal.symbol = quote.symbol;
             signal.company = quote.name;
-            signal.score = BuildScore(quote);
+            signal.score = components.score;
             const int source_bonus = quote.source == "Alpha Vantage" && quote.live ? 5 : -3;
             const int confidence_penalty = DataConfidencePenalty(quote);
             signal.confidence = ClampInt(signal.score + source_bonus - confidence_penalty, 10, 96);
             signal.rating = RatingForScore(signal.score);
-            signal.posture = signal.score >= config.min_conviction ? "Eligible watch" : "Below threshold";
+            signal.setup_type = signal.score >= 75 ? "Paper Long Setup Detected" :
+                signal.score >= 60 ? "Paper Watch Setup" :
+                signal.score >= 40 ? "No Paper Setup" :
+                "Momentum Failure Review";
+            signal.posture = signal.score >= config.min_conviction ? "Manual review queue" : "Research watch";
             signal.horizon = signal.score >= 70 ? "2-8 weeks" : "1-4 weeks";
-            signal.target_price = quote.price * (1.0 + ClampDouble((signal.score - 48) / 100.0, 0.02, 0.18));
-            signal.stop_level = quote.price * (1.0 - ClampDouble((100 - signal.score) / 300.0, 0.04, 0.16));
+            const double price = quote.price > 0.0 ? quote.price : 1.0;
+            const double range = price > 0.0 ? ((quote.high - quote.low) / price) * 100.0 : 0.0;
+            const double stop_percent = ClampDouble(0.045 + (quote.beta * 0.012) + (range / 220.0), 0.045, 0.14);
+            signal.entry_price = signal.score >= 75 ?
+                std::max(price * 1.002, components.breakout_confirmed ? components.recent_high * 1.001 : price * 1.002) :
+                price;
+            signal.stop_level = price * (1.0 - stop_percent);
+            if (components.recent_low > 0.0 && components.recent_low < price && components.recent_low > signal.stop_level)
+                signal.stop_level = components.recent_low * 0.995;
+            if (signal.stop_level >= signal.entry_price)
+                signal.stop_level = signal.entry_price * (1.0 - stop_percent);
+            const double planned_risk = std::max(signal.entry_price * 0.0001, signal.entry_price - signal.stop_level);
+            signal.atr_value = std::max(components.atr, signal.entry_price * 0.003);
+            signal.resistance_level = components.recent_high > signal.entry_price ? components.recent_high : 0.0;
+            const double target_2r = signal.entry_price + planned_risk * 2.0;
+            const double atr_moderate = signal.entry_price + signal.atr_value * 2.0;
+            signal.target1_price = std::max(target_2r, atr_moderate);
+            if (signal.resistance_level > signal.entry_price && signal.resistance_level >= signal.target1_price * 0.985)
+                signal.target2_price = std::max(signal.target1_price, signal.resistance_level);
+            else
+            {
+                const double continuation_step = std::max(std::min(signal.atr_value, planned_risk * 0.75), signal.entry_price * 0.003);
+                const double continuation_target = signal.entry_price + std::max(planned_risk * 3.0, signal.atr_value * 3.0);
+                signal.target2_price = std::max(signal.target1_price + continuation_step, continuation_target);
+            }
+            const double max_reasonable_target = signal.entry_price + std::max(planned_risk * 3.5, signal.atr_value * 4.0);
+            signal.target2_price = std::min(signal.target2_price, max_reasonable_target);
+            signal.target_price = signal.target2_price;
+            signal.trailing_stop_level = std::max(signal.stop_level, signal.entry_price - signal.atr_value * 2.0);
+            signal.risk_reward = planned_risk > 0.0 ? (signal.target1_price - signal.entry_price) / planned_risk : 0.0;
+            signal.risk_score = BuildRiskScore(quote, signal.entry_price, signal.stop_level);
+            signal.manual_confirmation_required = true;
+            signal.paper_only = true;
+            signal.entry_idea = "Paper entry only above " + FormatCurrency(signal.entry_price) + " after manual confirmation.";
+            signal.invalidation = "Invalidated if price closes below " + FormatCurrency(signal.stop_level) + " or the momentum score falls below 50.";
+            signal.expected_sell_zone = FormatCurrency(signal.target1_price) + " to " + FormatCurrency(signal.target2_price);
+            signal.exit_plan = "Scale paper exits: review 50% near " + FormatCurrency(signal.target1_price) +
+                ", review 25% near " + FormatCurrency(signal.target2_price) +
+                ", and trail the remaining 25% at 2x ATR below the highest close.";
             signal.position_budget = std::min(config.max_position_amount, config.portfolio_cash * (config.max_portfolio_risk_percent / 100.0) * 8.0);
-            signal.upside = FormatPercent(quote.price > 0.0 ? ((signal.target_price - quote.price) / quote.price) * 100.0 : 0.0);
-            signal.downside = FormatPercent(quote.price > 0.0 ? ((signal.stop_level - quote.price) / quote.price) * 100.0 : 0.0);
-            signal.risk = RiskForQuote(quote);
+            signal.upside = FormatPercent(signal.entry_price > 0.0 ? ((signal.target_price - signal.entry_price) / signal.entry_price) * 100.0 : 0.0);
+            signal.downside = FormatPercent(signal.entry_price > 0.0 ? ((signal.stop_level - signal.entry_price) / signal.entry_price) * 100.0 : 0.0);
+            signal.risk = RiskLabelForScore(signal.risk_score);
             signal.source = quote.source;
 
-            if (signal.score >= 76)
-                signal.thesis = quote.symbol + " has positive price momentum with enough liquidity to stay on the high-conviction research board.";
-            else if (signal.score >= 64)
-                signal.thesis = quote.symbol + " is improving, but the model wants confirmation from follow-through and broader market tone.";
-            else if (signal.score >= 50)
-                signal.thesis = quote.symbol + " is balanced. Aegis keeps it visible without forcing a bullish setup.";
+            if (signal.score >= 90)
+                signal.thesis = quote.symbol + " has aligned trend, participation, and regime inputs for a high-conviction paper setup. The exit zone is probabilistic and still requires confirmation, not a guaranteed price.";
+            else if (signal.score >= 75)
+                signal.thesis = quote.symbol + " shows enough aligned momentum to draft a paper long plan with explicit invalidation, partial exit zones, and sizing limits.";
+            else if (signal.score >= 60)
+                signal.thesis = quote.symbol + " is improving, but the setup still needs confirmation from follow-through, volume, and broader market tone.";
+            else if (signal.score >= 40)
+                signal.thesis = quote.symbol + " is balanced. Auralith keeps it visible for research without creating a paper execution plan.";
             else
-                signal.thesis = quote.symbol + " is showing weak or noisy conditions, so risk control matters more than entry timing.";
+                signal.thesis = quote.symbol + " is showing weak or deteriorating momentum, so the review should focus on stops, exposure, and risk reduction.";
 
-            const double range = quote.price > 0.0 ? ((quote.high - quote.low) / quote.price) * 100.0 : 0.0;
             signal.factors = {
-                {"Momentum", "", FormatPercent(quote.change_percent), std::to_string(signal.score), "Latest quote change compared with previous close.", "Price"},
-                {"Intraday range", "", FormatPercent(range), "", "A wide range raises execution and stop-placement risk.", "Risk"},
-                {"Liquidity", "", FormatVolume(quote.volume), "", "Higher volume improves confidence that prices are observable and tradable.", "Volume"},
+                {"Trend", "", std::to_string(components.trend) + "/100", "25%", "Price versus 20-period and 50-period averages, plus the slope of the longer average.", "Trend"},
+                {"Rate of change", "", "5d " + FormatPercent(components.roc5) + " / 20d " + FormatPercent(components.roc20), "", "Positive short and swing rate-of-change improves the momentum setup.", "ROC"},
+                {"RSI / MACD", "", "RSI " + std::to_string(static_cast<int>(std::round(components.rsi14))) + " / MACD " + (components.macd_histogram >= 0.0 ? "positive" : "negative"), "20%", "Healthy momentum prefers RSI 50-70 and a rising MACD profile without overextension.", "Oscillator"},
+                {"Volume confirmation", "", FormatVolume(quote.volume), "20%", "Higher participation improves confidence that price movement has observable support.", "Volume"},
+                {"Breakout strength", "", components.breakout_confirmed ? "Confirmed" : "Watching", "15%", "A breakout requires price above recent resistance with volume confirmation.", "Breakout"},
+                {"Sector and regime", "", std::to_string((components.sector + components.regime) / 2) + "/100", "20%", "Sector proxy and market-regime proxy reduce setup quality when broader risk is elevated.", "Context"},
+                {"Paper setup boundary", "", signal.entry_idea, "", signal.invalidation, "Paper"},
+                {"Target 1", "", FormatCurrency(signal.target1_price), "50%", "First expected sell zone uses at least 2R discipline and ATR realism.", "Exit"},
+                {"Target 2", "", FormatCurrency(signal.target2_price), "25%", "Second expected sell zone considers nearby resistance and a capped ATR continuation path.", "Exit"},
+                {"Trailing stop", "", FormatCurrency(signal.trailing_stop_level), "25%", "Trail the remaining paper position at 2x ATR below the highest close while momentum holds.", "Exit"},
+                {"ATR / resistance", "", FormatCurrency(signal.atr_value) + " / " + (signal.resistance_level > 0.0 ? FormatCurrency(signal.resistance_level) : "None above entry"), "", "ATR keeps expected sell zones realistic; resistance marks prior supply where momentum may stall.", "Path"},
+                {"Risk / reward", "", FormatRatio(signal.risk_reward), std::to_string(signal.risk_score) + "/100 risk", "Targets are expected sell zones for paper planning, not guaranteed sell prices.", "Risk"},
                 {"Data confidence", "", std::to_string(signal.confidence) + "%", "-" + std::to_string(confidence_penalty), DataQualityBadge(quote) + ". " + quote.note, "Freshness"},
-                {"Risk budget", "", FormatCurrency(signal.position_budget), "", "Position sizing is capped by the configured paper portfolio controls.", "Sizing"}
+                {"Risk budget", "", FormatCurrency(signal.position_budget), "", "Position sizing is capped by the configured paper portfolio controls.", "Sizing"},
+                {"Manual confirmation", "", "Required", "", "Auralith can draft the paper plan, but a user must confirm before any simulated execution is recorded.", "Safety"}
             };
             return signal;
         }
@@ -384,7 +762,7 @@ namespace aegis
 
         std::string SignalHaystack(const StockSignal& signal)
         {
-            return Lower(signal.symbol + " " + signal.company + " " + signal.rating + " " + signal.posture + " " + signal.risk + " " + signal.thesis);
+            return Lower(signal.symbol + " " + signal.company + " " + signal.rating + " " + signal.setup_type + " " + signal.posture + " " + signal.risk + " " + signal.thesis);
         }
 
         bool ContainsTerms(const std::string& haystack, const std::string& search)
@@ -633,7 +1011,7 @@ namespace aegis
         {
             StockState demo = MakeDemoStockState();
             demo.source_badge = "Demo market lab";
-            demo.source_label = "No Alpha Vantage key is saved, so Aegis is showing the built-in sample board.";
+            demo.source_label = "No Alpha Vantage key is saved, so Auralith is showing the built-in sample board.";
             return demo;
         }
 
@@ -716,7 +1094,7 @@ namespace aegis
             demo.loaded_from_api = false;
             demo.source_badge = "Demo fallback";
             demo.source_label = warnings.empty()
-                ? "Direct quote refresh returned no usable symbols, so Aegis is showing demo data."
+                ? "Direct quote refresh returned no usable symbols, so Auralith is showing demo data."
                 : "Direct quote refresh paused: " + warnings.front();
             demo.market_status = state.market_status;
             demo.market_detail = state.market_detail;
@@ -1037,11 +1415,15 @@ namespace aegis
             const StockSignal& signal = state.signals[static_cast<size_t>(i)];
             bool keep = true;
             if (f == "eligible")
-                keep = signal.posture == "Eligible watch";
-            else if (f == "bullish")
-                keep = signal.score >= 64;
+                keep = signal.posture == "Manual review queue";
+            else if (f == "paper")
+                keep = signal.setup_type.find("Paper") != std::string::npos && signal.score >= 60;
             else if (f == "risk")
                 keep = signal.risk == "High";
+            else if (f == "neutral")
+                keep = signal.rating == "Neutral research";
+            else if (f == "weak")
+                keep = signal.rating == "Weak momentum";
             else if (f != "all")
                 keep = Lower(signal.rating).find(f) != std::string::npos;
 
@@ -1076,23 +1458,33 @@ namespace aegis
     int DataConfidencePenalty(const StockQuote& quote)
     {
         int penalty = 0;
-        const std::string quality_text = quote.source + " " + quote.status + " " + quote.note + " " + quote.data_quality;
+        const std::string quality_text = quote.source + " " + quote.status + " " + quote.note + " " + quote.data_quality + " " + quote.freshness + " " + quote.provider_error;
         if (!quote.live)
             penalty += 8;
+        if (quote.fallback)
+            penalty += 6;
+        if (quote.delayed)
+            penalty += 3;
         if (quote.market_cap_estimated || quote.beta_estimated || quote.fundamentals_estimated)
             penalty += 6;
         if (ContainsWord(quality_text, "demo") || ContainsWord(quality_text, "sample"))
             penalty += 5;
         if (ContainsWord(quality_text, "fallback") || ContainsWord(quality_text, "stale") || ContainsWord(quality_text, "cache"))
             penalty += 6;
+        if (ContainsWord(quality_text, "error") || ContainsWord(quality_text, "failed"))
+            penalty += 8;
         return ClampInt(penalty, 0, 25);
     }
 
     std::string DataQualityBadge(const StockQuote& quote)
     {
-        const std::string quality_text = quote.source + " " + quote.status + " " + quote.note + " " + quote.data_quality;
+        const std::string quality_text = quote.source + " " + quote.status + " " + quote.note + " " + quote.data_quality + " " + quote.freshness + " " + quote.provider_error;
+        if (ContainsWord(quality_text, "error") || ContainsWord(quality_text, "failed"))
+            return "Provider error";
         if (ContainsWord(quality_text, "stale") || ContainsWord(quality_text, "cache") || ContainsWord(quality_text, "fallback"))
             return "Cache/stale fallback";
+        if (quote.delayed || ContainsWord(quality_text, "delayed"))
+            return quote.live ? "Delayed provider-backed" : "Delayed fallback";
         if (ContainsWord(quality_text, "demo") || ContainsWord(quality_text, "sample"))
             return "Demo / estimated";
         if (quote.market_cap_estimated || quote.beta_estimated || quote.fundamentals_estimated)
@@ -1104,12 +1496,17 @@ namespace aegis
     {
         const int penalty = DataConfidencePenalty(quote);
         const std::string badge = DataQualityBadge(quote);
+        const std::string provider = quote.provider.empty() ? (quote.source.empty() ? "Unknown" : quote.source) : quote.provider;
+        const std::string fetched_at = quote.fetched_at.empty() ? quote.timestamp : quote.fetched_at;
+        const int confidence = quote.data_confidence > 0 ? quote.data_confidence : ClampInt(100 - penalty, 25, 100);
         return {
-            { "Quote feed", quote.live ? "Live" : "Fallback", quote.source.empty() ? "Unknown" : quote.source, "", quote.timestamp.empty() ? "No fetch timestamp is available." : "Fetched or generated at " + quote.timestamp + ".", "quality", quote.live ? "Ready" : "Review", quote.source, quote.timestamp },
-            { "Price/volume", quote.live ? "Provider-backed" : "Demo/cache", quote.price > 0.0 ? FormatCurrency(quote.price) : "Unavailable", "", quote.live ? "Price, range, previous close, and volume came from the quote feed." : "Price data is not from a live provider in this board.", "quality", quote.live ? "Ready" : "Review", quote.source, quote.timestamp },
-            { "Fundamentals", quote.fundamentals_estimated ? "Estimated" : "Provider-backed", quote.fundamentals_estimated ? "Estimate" : "Reported", "", quote.fundamentals_estimated ? "Market cap, valuation, dividend yield, or company fundamentals need a fundamentals provider before they should drive decisions." : "Fundamental metrics are marked as provider-backed.", "quality", quote.fundamentals_estimated ? "Review" : "Ready", quote.source, quote.timestamp },
-            { "Risk beta", quote.beta_estimated ? "Estimated" : "Provider-backed", quote.beta_estimated ? "Estimate" : "Reported", "", quote.beta_estimated ? "Beta and beta-driven portfolio risk are confidence-adjusted until historical/provider beta is available." : "Beta is not flagged as estimated.", "quality", quote.beta_estimated ? "Review" : "Ready", quote.source, quote.timestamp },
-            { "Confidence decay", penalty > 0 ? "Applied" : "None", penalty > 0 ? "-" + std::to_string(penalty) : "0", "", badge + ". " + (quote.note.empty() ? "No provider limitation note was supplied." : quote.note), "quality", penalty > 0 ? "Review" : "Ready", quote.source, quote.timestamp }
+            { "Quote feed", quote.live ? "Provider-backed" : "Fallback", provider, "", fetched_at.empty() ? "No fetch timestamp is available." : "Fetched or generated at " + fetched_at + ".", "quality", quote.live ? "Ready" : "Review", provider, fetched_at },
+            { "Freshness", quote.freshness.empty() ? badge : quote.freshness, quote.fallback ? "Fallback" : (quote.delayed ? "Delayed" : "Live"), "", "Auralith treats freshness as part of the data contract, not UI decoration.", "quality", quote.fallback || quote.delayed ? "Review" : "Ready", provider, fetched_at },
+            { "Price/volume", quote.live ? "Provider-backed" : "Demo/cache", quote.price > 0.0 ? FormatCurrency(quote.price) : "Unavailable", "", quote.live ? "Price, range, previous close, and volume came from the quote feed." : "Price data is not from a live provider in this board.", "quality", quote.live ? "Ready" : "Review", provider, fetched_at },
+            { "Fundamentals", quote.fundamentals_estimated ? "Estimated" : "Provider-backed", quote.fundamentals_estimated ? "Estimate" : "Reported", "", quote.fundamentals_estimated ? "Market cap, valuation, dividend yield, or company fundamentals need a fundamentals provider before they should drive decisions." : "Fundamental metrics are marked as provider-backed.", "quality", quote.fundamentals_estimated ? "Review" : "Ready", provider, fetched_at },
+            { "Risk beta", quote.beta_estimated ? "Estimated" : "Provider-backed", quote.beta_estimated ? "Estimate" : "Reported", "", quote.beta_estimated ? "Beta and beta-driven portfolio risk are confidence-adjusted until historical/provider beta is available." : "Beta is not flagged as estimated.", "quality", quote.beta_estimated ? "Review" : "Ready", provider, fetched_at },
+            { "Research confidence", confidence >= 75 ? "High" : (confidence >= 50 ? "Medium" : "Low"), std::to_string(confidence) + "%", "", badge + ". Confidence is reduced by fallback, stale/delayed feeds, provider errors, and estimated fundamentals.", "quality", confidence >= 75 ? "Ready" : "Review", provider, fetched_at },
+            { "Confidence decay", penalty > 0 ? "Applied" : "None", penalty > 0 ? "-" + std::to_string(penalty) : "0", "", badge + ". " + (quote.note.empty() ? "No provider limitation note was supplied." : quote.note), "quality", penalty > 0 ? "Review" : "Ready", provider, fetched_at }
         };
     }
 

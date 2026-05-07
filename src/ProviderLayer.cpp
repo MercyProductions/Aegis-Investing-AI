@@ -2,6 +2,7 @@
 
 #include "Diagnostics.h"
 #include "Json.h"
+#include "services/SafetyGate.h"
 
 #include <algorithm>
 #include <chrono>
@@ -461,9 +462,11 @@ namespace aegis
 
     std::vector<InfoItem> BuildProductionReadinessRows(const Config& config)
     {
+        const SafetyGateResult live_gate = EvaluateSafetyGate(config, { ExecutionIntent::LiveExecution, false, "" });
         return {
             Row("Research guardrails", config.paper_only_mode ? "Visible" : "Check", config.paper_only_mode ? "Paper only" : "Paper mode off", "Trade planning and exports should keep research-only language visible."),
-            Row("Live trading path", config.require_manual_confirmation ? "Locked" : "Review", "Manual confirmation", "No broker module should place live orders without explicit unlock, confirmations, and audit trail."),
+            Row("Current risk state", CurrentRiskStateLabel(config), config.require_manual_confirmation ? "Manual confirmation" : "Review", "Paper-only and manual-confirmation guardrails are evaluated through the central Auralith safety gate."),
+            Row("Live execution path", live_gate.state, "Locked", live_gate.reason),
             Row("Secrets", "Protected", "DPAPI + scrubber", "Alpha Vantage and remembered credentials use DPAPI; diagnostics redact common key/password/cookie patterns."),
             Row("Diagnostics", "Structured", "diagnostics.jsonl", "Each provider event records timestamp, severity, endpoint, symbol, HTTP status, duration, cache state, and error."),
             Row("Tests", "Available", "--self-test", "Run scripts/test.ps1 or the executable with --self-test for parser, indicator, backtest, strategy, and diagnostics checks."),

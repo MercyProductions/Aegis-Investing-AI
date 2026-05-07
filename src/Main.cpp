@@ -1,4 +1,4 @@
-﻿#include "Json.h"
+#include "Json.h"
 #include "Platform.h"
 #include "StockData.h"
 #include "AdvancedAnalytics.h"
@@ -8,14 +8,45 @@
 #include "BrokerImport.h"
 #include "Csv.h"
 #include "Diagnostics.h"
+#include "ai/memory/IntelligenceMemory.h"
+#include "ai/ResearchNarrative.h"
+#include "audit/AuditManager.h"
+#include "engine/AnalyticsEngine.h"
+#include "engine/AssetTypes.h"
+#include "engine/MarketEngine.h"
+#include "engine/PortfolioEngine.h"
+#include "engine/RegimeEngine.h"
+#include "engine/RiskEngine.h"
+#include "engine/SignalEngine.h"
+#include "history/HistoricalStore.h"
+#include "intelligence/ResearchTimeline.h"
+#include "metrics/InternalMetrics.h"
 #include "ImportValidation.h"
+#include "paper/PaperBroker.h"
+#include "persistence/CoreDatabase.h"
 #include "PositionSizing.h"
+#include "professional/ProfessionalPlatform.h"
+#include "providers/IMarketProvider.h"
 #include "ProviderLayer.h"
 #include "ReportExport.h"
+#include "reports/ReportComposer.h"
+#include "resilience/Resilience.h"
+#include "sdk/AuralithSDK.h"
 #include "SelfTests.h"
 #include "SettingsService.h"
+#include "services/BackgroundTaskManager.h"
+#include "services/SafetyGate.h"
+#include "shared/SharedModels.h"
 #include "SymbolRules.h"
 #include "WorkflowValidation.h"
+#include "workflows/DailyIntelligence.h"
+#include "workspaces/WorkspaceProfiles.h"
+#include "ui/AuralithEmbeddedLogo.h"
+#include "ui/AuralithLayout.h"
+#include "ui/AuralithSidebarArt.h"
+#include "ui/AuralithTheme.h"
+#include "ui/AuralithWidgets.h"
+#include "ui/SettingsTab.h"
 
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
@@ -26,11 +57,13 @@
 #include <shellapi.h>
 #include <tchar.h>
 #include <windows.h>
+#include <wincodec.h>
 
 #include <algorithm>
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
@@ -53,11 +86,22 @@ namespace
     UINT g_ResizeWidth = 0;
     UINT g_ResizeHeight = 0;
     ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
+    ID3D11ShaderResourceView* g_auralithLogoTexture = nullptr;
+    ID3D11ShaderResourceView* g_auralithSidebarArtTexture = nullptr;
+    int g_auralithLogoWidth = 0;
+    int g_auralithLogoHeight = 0;
+    int g_auralithSidebarArtWidth = 0;
+    int g_auralithSidebarArtHeight = 0;
 
     bool CreateDeviceD3D(HWND hWnd);
     void CleanupDeviceD3D();
     void CreateRenderTarget();
     void CleanupRenderTarget();
+    bool CreateTextureFromPngBytes(const unsigned char* bytes, std::size_t byte_count, ID3D11ShaderResourceView** out_texture, int* out_width, int* out_height);
+    bool CreateAuralithLogoTexture();
+    void CleanupAuralithLogoTexture();
+    bool CreateAuralithSidebarArtTexture();
+    void CleanupAuralithSidebarArtTexture();
     void ApplyTheme();
     void ApplyLightTheme();
     void ApplyHighContrastTheme(bool light_theme);
@@ -94,9 +138,7 @@ namespace
 
     void TextMuted(const char* text)
     {
-        ImGui::PushStyleColor(ImGuiCol_Text, V4(0.62f, 0.68f, 0.66f, 1.0f));
-        ImGui::TextUnformatted(text);
-        ImGui::PopStyleColor();
+        auralith::ui::TextMuted(text);
     }
 
     void TextValueColored(double value, const std::string& text)
@@ -226,9 +268,9 @@ namespace
         ImGui::PushID(label);
         const bool clicked = ImGui::InvisibleButton("toolbar_button", size);
         const bool hovered = ImGui::IsItemHovered();
-        const ImU32 bg = active ? Col(0.07f, 0.24f, 0.18f, 1.0f) : hovered ? Col(0.07f, 0.12f, 0.12f, 0.96f) : Col(0.035f, 0.052f, 0.052f, 0.94f);
-        const ImU32 border = active ? Col(0.24f, 0.86f, 0.54f, 0.58f) : Col(0.75f, 0.90f, 0.86f, 0.13f);
-        const ImU32 fg = active ? Col(0.46f, 1.0f, 0.68f, 1.0f) : Col(0.78f, 0.86f, 0.84f, 1.0f);
+        const ImU32 bg = active ? Col(0.06f, 0.15f, 0.28f, 1.0f) : hovered ? Col(0.06f, 0.09f, 0.14f, 0.96f) : Col(0.030f, 0.040f, 0.060f, 0.94f);
+        const ImU32 border = active ? Col(0.38f, 0.66f, 1.0f, 0.58f) : Col(0.72f, 0.78f, 0.86f, 0.13f);
+        const ImU32 fg = active ? Col(0.62f, 0.80f, 1.0f, 1.0f) : Col(0.78f, 0.84f, 0.90f, 1.0f);
         draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bg, 8.0f);
         draw->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), border, 8.0f);
         DrawIcon(draw, ImVec2(pos.x + 22.0f, pos.y + size.y * 0.5f), 18.0f, icon, fg, 1.6f);
@@ -239,51 +281,41 @@ namespace
 
     bool SmallActionButton(const char* label)
     {
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.0f);
-        ImGui::PushStyleColor(ImGuiCol_Button, V4(0.07f, 0.18f, 0.14f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, V4(0.10f, 0.30f, 0.20f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, V4(0.12f, 0.38f, 0.24f, 1.0f));
-        const bool clicked = ImGui::Button(label);
-        ImGui::PopStyleColor(3);
-        ImGui::PopStyleVar();
-        return clicked;
+        return auralith::ui::SecondaryButton(label, ImVec2(0.0f, 34.0f));
     }
 
     void MetricCard(const aegis::InfoItem& item, const ImVec2& size)
     {
-        ImGui::BeginChild(item.name.c_str(), size, true, ImGuiWindowFlags_NoScrollbar);
-        ImGui::PushFont(g_font_bold);
-        TextMuted(item.name.c_str());
-        ImGui::PopFont();
-        ImGui::Spacing();
-        ImGui::PushFont(g_font_title);
-        ImGui::TextUnformatted(item.value.c_str());
-        ImGui::PopFont();
-        ImGui::Spacing();
-        ImGui::TextWrapped("%s", item.detail.c_str());
-        ImGui::EndChild();
+        auralith::ui::Tone tone = auralith::ui::Tone::Neutral;
+        const std::string lower = aegis::Lower(item.name + " " + item.value + " " + item.detail);
+        if (lower.find("risk") != std::string::npos || lower.find("stale") != std::string::npos)
+            tone = auralith::ui::Tone::Warning;
+        if (lower.find("gain") != std::string::npos || lower.find("positive") != std::string::npos || lower.find("on") != std::string::npos)
+            tone = auralith::ui::Tone::Success;
+        if (lower.find("loss") != std::string::npos || lower.find("critical") != std::string::npos)
+            tone = auralith::ui::Tone::Danger;
+
+        auralith::ui::MetricCard({
+            item.name,
+            item.value,
+            item.label,
+            item.detail,
+            tone,
+            -1.0f,
+            true
+        }, size);
     }
 
     void SectionTitle(const char* title, const char* subtitle = nullptr)
     {
-        ImGui::PushFont(g_font_bold);
-        ImGui::TextUnformatted(title);
-        ImGui::PopFont();
-        if (subtitle != nullptr && subtitle[0] != '\0')
-            TextMuted(subtitle);
+        auralith::ui::SectionHeader(title, subtitle);
     }
 
     void DrawScorePill(int score, const ImVec2& size)
     {
         const float t = std::clamp(static_cast<float>(score) / 100.0f, 0.0f, 1.0f);
-        const ImVec2 pos = ImGui::GetCursorScreenPos();
-        ImDrawList* draw = ImGui::GetWindowDrawList();
-        const ImU32 bg = Col(0.035f, 0.052f, 0.052f, 1.0f);
-        const ImU32 fill = score >= 64 ? Col(0.23f, 0.86f, 0.48f, 1.0f) : score >= 50 ? Col(0.88f, 0.72f, 0.26f, 1.0f) : Col(0.95f, 0.36f, 0.36f, 1.0f);
-        draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bg, 5.0f);
-        draw->AddRectFilled(pos, ImVec2(pos.x + size.x * t, pos.y + size.y), fill, 5.0f);
-        draw->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), Col(0.78f, 0.90f, 0.84f, 0.16f), 5.0f);
-        ImGui::Dummy(size);
+        const auralith::ui::Tone tone = score >= 64 ? auralith::ui::Tone::Success : score >= 50 ? auralith::ui::Tone::Warning : auralith::ui::Tone::Danger;
+        auralith::ui::ProgressBar("score_pill", t, size, false, tone, "Auralith scanner score. Higher scores still require manual paper-plan review.");
     }
 
     void PlotHistory(const std::vector<float>& values, const ImVec2& size)
@@ -558,6 +590,7 @@ namespace
             SetBuffer(watchlist_buffer_, sizeof(watchlist_buffer_), config_.watchlist);
             SetBuffer(api_key_buffer_, sizeof(api_key_buffer_), config_.alpha_vantage_api_key);
             SetBuffer(auth_base_buffer_, sizeof(auth_base_buffer_), config_.auth_base_url);
+            SetBuffer(website_base_buffer_, sizeof(website_base_buffer_), config_.website_base_url);
             SetBuffer(sec_user_agent_buffer_, sizeof(sec_user_agent_buffer_), config_.sec_user_agent);
             SetBuffer(strategy_rule_buffer_, sizeof(strategy_rule_buffer_), "RSI < 45 AND CLOSE > SMA50");
             SetBuffer(compare_symbols_buffer_, sizeof(compare_symbols_buffer_), DefaultCompareSymbols());
@@ -633,7 +666,7 @@ namespace
             HandleKeyboardShortcuts(io);
             ImGui::SetNextWindowPos(ImVec2(0, 0));
             ImGui::SetNextWindowSize(io.DisplaySize);
-            ImGui::Begin("Aegis Stock Investing AI", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+            ImGui::Begin("Auralith Research Cockpit", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
 
             RenderShell();
 
@@ -659,7 +692,7 @@ namespace
         int research_request_id_ = 0;
         std::chrono::steady_clock::time_point last_refresh_ = std::chrono::steady_clock::now();
         std::chrono::steady_clock::time_point last_alert_check_{};
-        std::string status_ = "Starting Aegis stock workspace...";
+        std::string status_ = "Starting Auralith research cockpit...";
         std::string validation_status_ = "Key not validated this session.";
         std::string history_status_ = "Historical candles not loaded yet.";
         std::string research_status_ = "Research bundle not loaded yet.";
@@ -672,6 +705,9 @@ namespace
         aegis::HistoricalCandlesResult history_result_;
         aegis::ResearchBundleResult research_result_;
         int selected_tab_ = 0;
+        int daily_workflow_mode_ = 0;
+        int command_focus_mode_ = 0;
+        int symbol_research_tab_ = 0;
         int quote_filter_ = 0;
         int signal_filter_ = 0;
         char search_buffer_[128]{};
@@ -679,6 +715,7 @@ namespace
         char watchlist_buffer_[512]{};
         char api_key_buffer_[256]{};
         char auth_base_buffer_[256]{};
+        char website_base_buffer_[256]{};
         char sec_user_agent_buffer_[256]{};
         char login_user_buffer_[128]{};
         char login_password_buffer_[128]{};
@@ -712,6 +749,8 @@ namespace
         bool light_theme_ = false;
         bool compact_mode_ = false;
         bool show_setup_wizard_ = false;
+        bool focus_command_palette_ = false;
+        bool command_palette_open_ = false;
         char holding_symbol_buffer_[24]{};
         char holding_note_buffer_[160]{};
         char alert_symbol_buffer_[24]{};
@@ -793,16 +832,15 @@ namespace
             const ImVec2 avail = ImGui::GetContentRegionAvail();
             const float sidebar_w = compact_mode_ ? 214.0f : 244.0f;
 
+            auralith::ui::PushPanelStyle(true);
             ImGui::BeginChild("sidebar", ImVec2(sidebar_w, avail.y), true, ImGuiWindowFlags_NoScrollbar);
+            auralith::ui::PopPanelStyle();
             RenderSidebar(sidebar_w);
             ImGui::EndChild();
 
             ImGui::SameLine();
             ImGui::BeginChild("content", ImVec2(0, avail.y), false);
             RenderHeader();
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
 
             switch (selected_tab_)
             {
@@ -816,117 +854,321 @@ namespace
             case 7: RenderJournal(); break;
             case 8: RenderIntegrations(); break;
             case 9: RenderSettings(); break;
+            case 10: RenderDailyIntelligence(); break;
+            case 11: RenderStrategyLab(); break;
+            case 12: RenderRiskConsole(); break;
+            case 13: RenderSymbolResearchPage(); break;
             default: RenderDashboard(); break;
             }
 
             ImGui::EndChild();
+            RenderCommandPaletteOverlay();
+            RenderToastStack();
+        }
+
+        void RenderAuralithLogoCard(float width)
+        {
+            if (g_auralithLogoTexture == nullptr || g_auralithLogoWidth <= 0 || g_auralithLogoHeight <= 0)
+            {
+                auralith::ui::LogoCard(width, "Auralith", "Research Terminal");
+                return;
+            }
+
+            const ImVec2 pos = ImGui::GetCursorScreenPos();
+            const ImVec2 size(width, 78.0f);
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            draw->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), auralith::ui::U32(auralith::ui::GetPalette().panel_elevated), 10.0f);
+            draw->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), auralith::ui::U32(auralith::ui::GetPalette().border_active), 10.0f);
+
+            const float max_w = width - 28.0f;
+            const float max_h = 46.0f;
+            float image_w = max_w;
+            float image_h = image_w * static_cast<float>(g_auralithLogoHeight) / static_cast<float>(g_auralithLogoWidth);
+            if (image_h > max_h)
+            {
+                image_h = max_h;
+                image_w = image_h * static_cast<float>(g_auralithLogoWidth) / static_cast<float>(g_auralithLogoHeight);
+            }
+
+            const ImVec2 image_pos(pos.x + (size.x - image_w) * 0.5f, pos.y + (size.y - image_h) * 0.5f);
+            const ImTextureRef logo_ref((ImTextureID)(intptr_t)g_auralithLogoTexture);
+            draw->AddImage(logo_ref, image_pos, ImVec2(image_pos.x + image_w, image_pos.y + image_h));
+            ImGui::Dummy(size);
+        }
+
+        void RenderSidebarBackground(float width)
+        {
+            if (g_auralithSidebarArtTexture == nullptr || g_auralithSidebarArtWidth <= 0 || g_auralithSidebarArtHeight <= 0)
+                return;
+
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const ImVec2 min = ImGui::GetWindowPos();
+            const ImVec2 max(min.x + width, min.y + ImGui::GetWindowHeight());
+            const ImTextureRef art_ref((ImTextureID)(intptr_t)g_auralithSidebarArtTexture);
+            draw->AddImage(art_ref, min, max, ImVec2(0, 0), ImVec2(1, 1), Col(1.0f, 1.0f, 1.0f, 0.72f));
+            draw->AddRectFilled(min, max, Col(0.0f, 0.0f, 0.0f, 0.18f));
         }
 
         void RenderSidebar(float width)
         {
-            ImDrawList* draw = ImGui::GetWindowDrawList();
-            const ImVec2 logo_pos = ImGui::GetCursorScreenPos();
-            draw->AddRectFilled(logo_pos, ImVec2(logo_pos.x + width - 24.0f, logo_pos.y + 72.0f), Col(0.03f, 0.08f, 0.07f, 1.0f), 8.0f);
-            DrawIcon(draw, ImVec2(logo_pos.x + 30.0f, logo_pos.y + 36.0f), 34.0f, IconKind::Shield, Col(0.42f, 1.0f, 0.62f, 1.0f), 2.0f);
-            draw->AddText(g_font_title, 22.0f, ImVec2(logo_pos.x + 58.0f, logo_pos.y + 16.0f), Col(0.92f, 0.98f, 0.94f), "Aegis");
-            draw->AddText(g_font_bold, 13.0f, ImVec2(logo_pos.x + 59.0f, logo_pos.y + 43.0f), Col(0.62f, 0.74f, 0.70f), "Stock Investing AI");
-            ImGui::Dummy(ImVec2(width - 24.0f, 84.0f));
+            RenderSidebarBackground(width);
+            const float inner = width - 24.0f;
+            const auto nav = [&](const char* label, const char* icon, int tab) {
+                if (auralith::ui::NavItem(label, icon, selected_tab_ == tab, ImVec2(inner, compact_mode_ ? 38.0f : 42.0f)))
+                    selected_tab_ = tab;
+            };
 
-            if (ToolbarButton("Dashboard", IconKind::Dashboard, ImVec2(width - 24.0f, 42.0f), selected_tab_ == 0)) selected_tab_ = 0;
-            if (ToolbarButton("Watchlist", IconKind::Watchlist, ImVec2(width - 24.0f, 42.0f), selected_tab_ == 1)) selected_tab_ = 1;
-            if (ToolbarButton("AI Scanner", IconKind::Scanner, ImVec2(width - 24.0f, 42.0f), selected_tab_ == 2)) selected_tab_ = 2;
-            if (ToolbarButton("Portfolio", IconKind::Portfolio, ImVec2(width - 24.0f, 42.0f), selected_tab_ == 3)) selected_tab_ = 3;
-            if (ToolbarButton("Research", IconKind::Research, ImVec2(width - 24.0f, 42.0f), selected_tab_ == 4)) selected_tab_ = 4;
-            if (ToolbarButton("Chart Lab", IconKind::Chart, ImVec2(width - 24.0f, 42.0f), selected_tab_ == 5)) selected_tab_ = 5;
-            if (ToolbarButton("Compare", IconKind::Compare, ImVec2(width - 24.0f, 42.0f), selected_tab_ == 6)) selected_tab_ = 6;
-            if (ToolbarButton("Journal", IconKind::Journal, ImVec2(width - 24.0f, 42.0f), selected_tab_ == 7)) selected_tab_ = 7;
-            if (ToolbarButton("Integrations", IconKind::Integration, ImVec2(width - 24.0f, 42.0f), selected_tab_ == 8)) selected_tab_ = 8;
-            if (ToolbarButton("Settings", IconKind::Settings, ImVec2(width - 24.0f, 42.0f), selected_tab_ == 9)) selected_tab_ = 9;
+            RenderAuralithLogoCard(inner);
+            ImGui::Dummy(ImVec2(1.0f, compact_mode_ ? 8.0f : 12.0f));
+
+            auralith::ui::TextMuted("MARKETS");
+            nav("Dashboard", "D", 0);
+            nav("Watchlist", "W", 1);
+            nav("AI Scanner", "S", 2);
+            nav("Portfolio", "P", 3);
+            nav("Research", "R", 4);
+            nav("Chart Lab", "C", 5);
+            nav("Compare", "X", 6);
+            nav("Journal", "J", 7);
+
+            ImGui::Dummy(ImVec2(1.0f, compact_mode_ ? 6.0f : 10.0f));
+            auralith::ui::TextMuted("OPERATIONS");
+            nav("Integrations", "I", 8);
+            nav("Daily Ops", "M", 10);
+            nav("Strategy Lab", "B", 11);
+            nav("Risk Console", "G", 12);
+            nav("Symbol Page", "Q", 13);
+            nav("Settings", "T", 9);
 
             ImGui::Dummy(ImVec2(1.0f, compact_mode_ ? 6.0f : 12.0f));
             const float source_h = std::clamp(ImGui::GetWindowHeight() - ImGui::GetCursorPosY() - 92.0f, 74.0f, 126.0f);
-            ImGui::BeginChild("source_status", ImVec2(width - 24.0f, source_h), true, ImGuiWindowFlags_NoScrollbar);
-            SectionTitle(state_.source_badge.c_str());
-            ImGui::TextWrapped("%s", state_.market_status.c_str());
-            TextMuted(state_.last_refresh_label.c_str());
-            ImGui::Separator();
+            if (auralith::ui::BeginCard("source_status", "Session", state_.source_badge.c_str(), ImVec2(inner, source_h), true, ImGuiWindowFlags_NoScrollbar))
+            {
+                auralith::ui::StatusPill({ config_.paper_only_mode ? "Paper: ON" : "Paper: Review", config_.paper_only_mode ? auralith::ui::Tone::Info : auralith::ui::Tone::Warning, "Paper-only safety state.", "P" });
+                ImGui::SameLine();
+                auralith::ui::StatusPill({ state_.source_badge, auralith::ui::Tone::Info, state_.market_status, "D" });
+                ImGui::Dummy(ImVec2(1.0f, 6.0f));
+                auralith::ui::TextSecondary(state_.market_status.c_str());
+                TextMuted(state_.last_refresh_label.c_str());
+            }
             const int unread_alerts = aegis::CountUnreadAlertEvents(alert_events_);
             const std::string alert_line = std::to_string(unread_alerts) + " unread alert" + (unread_alerts == 1 ? "" : "s");
-            TextMuted(alert_line.c_str());
-            ImGui::TextWrapped("%s", status_.c_str());
-            ImGui::EndChild();
+            auralith::ui::TextMuted(alert_line.c_str());
+            auralith::ui::EndCard();
 
             if (ImGui::GetWindowHeight() > ImGui::GetCursorPosY() + 82.0f)
             {
                 ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 84.0f);
-                ImGui::BeginChild("auth_status", ImVec2(width - 24.0f, 70.0f), true, ImGuiWindowFlags_NoScrollbar);
-                TextMuted("Website session");
-                ImGui::PushFont(g_font_bold);
-                ImGui::TextWrapped("%s", authenticated_ ? (username_.empty() ? "Signed in" : username_.c_str()) : "Local research mode");
-                ImGui::PopFont();
-                ImGui::EndChild();
+                if (auralith::ui::BeginCard("auth_status", "Web Bridge", nullptr, ImVec2(inner, 70.0f), false, ImGuiWindowFlags_NoScrollbar))
+                {
+                    const char* label = authenticated_ ? (username_.empty() ? "Signed in" : username_.c_str()) : "Local research mode";
+                    auralith::ui::StatusPill({ label, authenticated_ ? auralith::ui::Tone::Info : auralith::ui::Tone::Muted, "Desktop/web bridge account state.", "A" });
+                    auralith::ui::TextMuted(config_.website_base_url.c_str());
+                }
+                auralith::ui::EndCard();
             }
         }
 
         void RenderHeader()
         {
-            ImGui::BeginChild("header", ImVec2(0, 74.0f), false, ImGuiWindowFlags_NoScrollbar);
+            if (!auralith::ui::BeginCard("header", nullptr, nullptr, ImVec2(0, 126.0f), true, ImGuiWindowFlags_NoScrollbar))
+                return;
             const DataStatusSummary data_status = BuildDataStatusSummary();
             ImGui::PushFont(g_font_title);
-            ImGui::TextUnformatted("Aegis Stock Investing AI");
+            ImGui::TextUnformatted("Auralith Research Cockpit");
             ImGui::PopFont();
             ImGui::SameLine();
             RenderDataStatusBadge(data_status);
-            TextMuted("Native C++ market research workspace");
 
-            ImGui::SameLine(ImGui::GetWindowWidth() - 676.0f);
-            ImGui::SetNextItemWidth(168.0f);
-            if (ImGui::InputTextWithHint("##command", "Command: add NVDA", command_buffer_, sizeof(command_buffer_), ImGuiInputTextFlags_EnterReturnsTrue))
-                RunCommandPalette();
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(150.0f);
-            ImGui::InputTextWithHint("##search", "Search symbols", search_buffer_, sizeof(search_buffer_));
-            ImGui::SameLine();
-            if (SmallActionButton(refresh_in_flight_ ? "Refreshing..." : "Refresh"))
-                BeginRefresh(false);
-            ImGui::SameLine();
+            ImGui::SameLine(ImGui::GetWindowWidth() - 822.0f);
             const int unread_alerts = aegis::CountUnreadAlertEvents(alert_events_);
-            const std::string alert_button = "Alerts " + std::to_string(unread_alerts);
-            if (SmallActionButton(alert_button.c_str()))
+            std::string market_pill = state_.market_status.empty() ? "Market: --" : state_.market_status;
+            if (market_pill.size() > 28)
+                market_pill = market_pill.substr(0, 25) + "...";
+            auralith::ui::CommandBarResult command_result = auralith::ui::CommandBar({
+                command_buffer_,
+                sizeof(command_buffer_),
+                search_buffer_,
+                sizeof(search_buffer_),
+                focus_command_palette_,
+                refresh_in_flight_,
+                unread_alerts,
+                market_pill,
+                data_status.label,
+                "Ctrl+K"
+            });
+            focus_command_palette_ = false;
+            if (command_result.command_submitted)
+                RunCommandPalette();
+            if (command_result.refresh_clicked)
+                BeginRefresh(false);
+            if (command_result.alerts_clicked)
                 selected_tab_ = 7;
-            ImGui::SameLine();
-            if (SmallActionButton("Open Web"))
-                aegis::OpenExternalUrl(aegis::JoinUrl(config_.auth_base_url, config_.website_path));
-            ImGui::SameLine();
-            if (ImGui::Checkbox("Light", &light_theme_))
+            if (command_result.open_web_clicked)
+                aegis::OpenExternalUrl(aegis::JoinUrl(config_.website_base_url, config_.website_path));
+            if (command_result.theme_clicked)
             {
+                light_theme_ = !light_theme_;
                 PersistUiPreferences("UI theme saved.");
             }
 
-            ImGui::SetCursorPosY(48.0f);
-            ImGui::TextWrapped("%s", data_status.detail.c_str());
-            ImGui::EndChild();
+            ImGui::SetCursorPosY(50.0f);
+            RenderStatusPill(config_.paper_only_mode ? "Paper Mode: ON" : "Paper Mode: REVIEW", config_.paper_only_mode ? V4(0.12f, 0.38f, 0.72f, 1.0f) : V4(0.76f, 0.55f, 0.16f, 1.0f), "Auralith is paper-first. Live execution remains locked.");
+            ImGui::SameLine();
+            RenderStatusPill(config_.require_manual_confirmation ? "Manual Confirmation: Required" : "Manual Confirmation: Review", config_.require_manual_confirmation ? V4(0.18f, 0.34f, 0.58f, 1.0f) : V4(0.76f, 0.55f, 0.16f, 1.0f), "Paper execution simulation should require an explicit confirmation.");
+            ImGui::SameLine();
+            RenderStatusPill(("Risk State: " + aegis::CurrentRiskStateLabel(config_)).c_str(), config_.paper_only_mode && config_.require_manual_confirmation ? V4(0.32f, 0.28f, 0.58f, 1.0f) : V4(0.68f, 0.18f, 0.18f, 1.0f), "Current risk posture from the central safety gate.");
+
+            ImGui::SetCursorPosY(86.0f);
+            const std::string freshness = "Data Freshness: " + data_status.freshness +
+                " | Last Provider Refresh: " + (state_.last_refresh_label.empty() ? "--" : state_.last_refresh_label) +
+                " | " + data_status.detail +
+                " This workspace is research-only and not financial advice.";
+            auralith::ui::TextSecondary(freshness.c_str());
+            auralith::ui::EndCard();
+            ImGui::Dummy(ImVec2(1.0f, 14.0f));
+        }
+
+        void RenderCommandPaletteOverlay()
+        {
+            if (!command_palette_open_)
+                return;
+
+            ImGuiIO& io = ImGui::GetIO();
+            const ImVec2 size(640.0f, 360.0f);
+            ImGui::SetNextWindowPos(ImVec2((io.DisplaySize.x - size.x) * 0.5f, io.DisplaySize.y * 0.16f), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+            auralith::ui::PushPanelStyle(true);
+            const bool open = ImGui::Begin("Auralith Command Palette", &command_palette_open_, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
+            auralith::ui::PopPanelStyle();
+            if (!open)
+            {
+                ImGui::End();
+                return;
+            }
+
+            auralith::ui::SectionHeader("Command Center", "Search symbols, open workflows, create alerts, or refresh provider data.");
+            ImGui::Dummy(ImVec2(1.0f, 8.0f));
+            ImGui::SetKeyboardFocusHere();
+            if (auralith::ui::CommandBox("##overlay_command", "Try AAPL, refresh, risk, morning, report, or alert NVDA above 900", command_buffer_, sizeof(command_buffer_), ImGui::GetContentRegionAvail().x))
+            {
+                RunCommandPalette();
+                command_palette_open_ = false;
+            }
+
+            ImGui::Dummy(ImVec2(1.0f, 12.0f));
+            const float button_w = (ImGui::GetContentRegionAvail().x - 24.0f) / 3.0f;
+            if (auralith::ui::Button("Open Scanner", auralith::ui::ButtonVariant::Secondary, ImVec2(button_w, 38.0f)))
+            {
+                selected_tab_ = 2;
+                command_palette_open_ = false;
+            }
+            ImGui::SameLine();
+            if (auralith::ui::Button("Risk Console", auralith::ui::ButtonVariant::Secondary, ImVec2(button_w, 38.0f)))
+            {
+                selected_tab_ = 12;
+                command_palette_open_ = false;
+            }
+            ImGui::SameLine();
+            if (auralith::ui::Button("Morning Briefing", auralith::ui::ButtonVariant::Secondary, ImVec2(button_w, 38.0f)))
+            {
+                selected_tab_ = 10;
+                daily_workflow_mode_ = 0;
+                command_palette_open_ = false;
+            }
+
+            if (auralith::ui::Button("Symbol Research", auralith::ui::ButtonVariant::Secondary, ImVec2(button_w, 38.0f)))
+            {
+                selected_tab_ = 13;
+                command_palette_open_ = false;
+            }
+            ImGui::SameLine();
+            if (auralith::ui::Button("Refresh Providers", auralith::ui::ButtonVariant::Primary, ImVec2(button_w, 38.0f), !refresh_in_flight_))
+            {
+                BeginRefresh(false);
+                command_palette_open_ = false;
+            }
+            ImGui::SameLine();
+            if (auralith::ui::Button("Open Settings", auralith::ui::ButtonVariant::Ghost, ImVec2(button_w, 38.0f)))
+            {
+                selected_tab_ = 9;
+                command_palette_open_ = false;
+            }
+
+            ImGui::Dummy(ImVec2(1.0f, 12.0f));
+            auralith::ui::StatusPill({ "Paper Mode: ON", auralith::ui::Tone::Info, "Execution remains paper-only unless explicitly changed in guarded config.", "P" });
+            ImGui::SameLine();
+            auralith::ui::StatusPill({ "Manual Review Required", auralith::ui::Tone::Info, "Auralith generates research plans, not autonomous live orders.", "M" });
+            ImGui::SameLine();
+            auralith::ui::StatusPill({ "Research-first", auralith::ui::Tone::Purple, "Outputs are market research context, not financial advice.", "R" });
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+                command_palette_open_ = false;
+            ImGui::End();
+        }
+
+        void RenderToastStack()
+        {
+            if (status_.empty())
+                return;
+
+            ImGuiIO& io = ImGui::GetIO();
+            ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 386.0f, 18.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.94f);
+            auralith::ui::PushPanelStyle(true);
+            const bool open = ImGui::Begin("auralith_toast_stack", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
+            auralith::ui::PopPanelStyle();
+            if (open)
+            {
+                auralith::ui::StatusPill({ "Status", auralith::ui::Tone::Info, "Latest Auralith event.", "A" });
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", status_.c_str());
+            }
+            ImGui::End();
         }
 
         void RenderDataStatusBadge(const DataStatusSummary& summary)
         {
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 4.0f));
-            ImGui::PushStyleColor(ImGuiCol_Button, summary.color);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(std::min(summary.color.x + 0.08f, 1.0f), std::min(summary.color.y + 0.08f, 1.0f), std::min(summary.color.z + 0.08f, 1.0f), 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, summary.color);
-            ImGui::PushStyleColor(ImGuiCol_Text, V4(1.0f, 1.0f, 1.0f, 1.0f));
             const std::string label = "Data: " + summary.label;
-            if (ImGui::Button(label.c_str()))
+            const auralith::ui::Tone tone = summary.state == "Ready" ? auralith::ui::Tone::Info
+                : summary.state == "Fallback" ? auralith::ui::Tone::Warning
+                : summary.state == "Error" ? auralith::ui::Tone::Danger
+                : auralith::ui::Tone::Info;
+            auralith::ui::StatusPill({ label, tone, summary.state + "\n" + summary.detail, "D" });
+            if (ImGui::IsItemClicked())
                 selected_tab_ = 8;
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s\n%s", summary.state.c_str(), summary.detail.c_str());
-            ImGui::PopStyleColor(4);
-            ImGui::PopStyleVar(2);
+        }
+
+        void RenderStatusPill(const char* label, const ImVec4& color, const char* tooltip)
+        {
+            auralith::ui::Tone tone = auralith::ui::Tone::Info;
+            if (color.x > color.y && color.x > color.z)
+                tone = auralith::ui::Tone::Danger;
+            else if (color.y > color.x && color.y > color.z)
+                tone = auralith::ui::Tone::Success;
+            else if (color.z > color.x && color.z > color.y)
+                tone = auralith::ui::Tone::Info;
+            auralith::ui::StatusPill({ label, tone, tooltip != nullptr ? tooltip : "", "S" });
+            if (ImGui::IsItemClicked())
+                selected_tab_ = 8;
         }
 
         void RenderDashboard()
         {
+            const DataStatusSummary data_status = BuildDataStatusSummary();
+            auralith::ui::PageHeader({
+                "Dashboard",
+                "Executive market cockpit for paper-mode research, watchlist movement, risk posture, and provider freshness.",
+                {
+                    { config_.paper_only_mode ? "Paper Mode: ON" : "Paper Mode: Review", config_.paper_only_mode ? auralith::ui::Tone::Info : auralith::ui::Tone::Warning, "Paper-first execution boundary.", "P" },
+                    { "Manual Confirmation", config_.require_manual_confirmation ? auralith::ui::Tone::Info : auralith::ui::Tone::Warning, "Manual confirmation remains required for paper execution workflows.", "M" },
+                    { data_status.label, auralith::ui::Tone::Purple, data_status.detail, "D" }
+                },
+                "",
+                auralith::ui::Tone::Info
+            });
+
             const float metric_w = std::max(150.0f, (ImGui::GetContentRegionAvail().x - 48.0f) / 5.0f);
             for (int i = 0; i < static_cast<int>(state_.metrics.size()) && i < 5; ++i)
             {
@@ -945,22 +1187,260 @@ namespace
             }
             ImGui::Spacing();
             const float right_w = 410.0f;
-            ImGui::BeginChild("dashboard_table", ImVec2(ImGui::GetContentRegionAvail().x - right_w - 12.0f, 0), true);
-            SectionTitle("Live Watchlist", state_.market_detail.c_str());
-            RenderQuoteTable("dashboard_quotes", aegis::FilterQuotes(state_, "all", search_buffer_), 9);
-            ImGui::EndChild();
+            if (auralith::ui::BeginCard("dashboard_table", "Live Watchlist", state_.market_detail.c_str(), ImVec2(ImGui::GetContentRegionAvail().x - right_w - 12.0f, 0), true))
+            {
+                RenderQuoteTable("dashboard_quotes", aegis::FilterQuotes(state_, "all", search_buffer_), 9);
+            }
+            auralith::ui::EndCard();
 
             ImGui::SameLine();
-            ImGui::BeginChild("dashboard_detail", ImVec2(right_w, 0), true);
-            RenderSelectedSymbol();
-            ImGui::EndChild();
+            if (auralith::ui::BeginCard("dashboard_detail", "Selected Symbol", "Research context, paper plan, and provider metadata.", ImVec2(right_w, 0), true))
+            {
+                RenderSelectedSymbol();
+            }
+            auralith::ui::EndCard();
+        }
+
+        void RenderDailyIntelligence()
+        {
+            auralith::ui::PageHeader({ "Daily Intelligence", "Morning preparation, market-hours command, close review, weekly review, notifications, layouts, and onboarding.", {}, "", auralith::ui::Tone::Info });
+            const char* workflows[] = { "Morning Briefing", "Live Command Center", "End-of-Day Review", "Weekly Review" };
+            ImGui::SetNextItemWidth(210.0f);
+            ImGui::Combo("Workflow", &daily_workflow_mode_, workflows, IM_ARRAYSIZE(workflows));
+            ImGui::SameLine();
+            const char* focus_modes[] = { "Portfolio Monitor", "Watchlist Scanner", "Earnings Mode", "Volatility Mode", "Paper Execution Mode", "Research Mode" };
+            ImGui::SetNextItemWidth(210.0f);
+            ImGui::Combo("Focus Mode", &command_focus_mode_, focus_modes, IM_ARRAYSIZE(focus_modes));
+            ImGui::SameLine();
+            if (SmallActionButton("Export Report"))
+                ExportDailyBriefing();
+            ImGui::SameLine();
+            if (SmallActionButton("Refresh Providers"))
+                BeginRefresh(false);
+
+            ImGui::Spacing();
+            if (auralith::ui::BeginCard("daily_primary", "Workflow Board", "Briefings, command-center checklists, reviews, and action planning.", ImVec2(ImGui::GetContentRegionAvail().x * 0.58f, 0), true))
+            {
+            switch (std::clamp(daily_workflow_mode_, 0, 3))
+            {
+            case 0:
+                RenderInfoTable("Morning Briefing", aegis::BuildMorningBriefingRows(config_, state_, holdings_, price_alerts_, alert_events_, trade_plans_));
+                break;
+            case 1:
+                RenderInfoTable("Live Market Command Center", aegis::BuildMarketCommandCenterRows(config_, state_, holdings_, price_alerts_, alert_events_, static_cast<aegis::DailyFocusMode>(std::clamp(command_focus_mode_, 0, 5))));
+                break;
+            case 2:
+                RenderInfoTable("End-of-Day Review", aegis::BuildEndOfDayReviewRows(config_, state_, holdings_, alert_events_, trade_plans_, journal_entries_));
+                break;
+            case 3:
+                RenderInfoTable("Weekly Portfolio Review", aegis::BuildWeeklyReviewRows(config_, state_, holdings_, trade_plans_, journal_entries_));
+                break;
+            default:
+                break;
+            }
+            ImGui::Spacing();
+            RenderInfoTable("Action Checklist", aegis::BuildCommandPaletteRows());
+            }
+            auralith::ui::EndCard();
+
+            ImGui::SameLine();
+            if (auralith::ui::BeginCard("daily_secondary", "Operational Context", "Notifications, data confidence, layouts, imports, exports, and onboarding.", ImVec2(0, 0), true))
+            {
+            RenderInfoTable("Notification Inbox", aegis::BuildNotificationInboxRows(config_, state_, alert_events_));
+            ImGui::Spacing();
+            RenderInfoTable("Data Quality Confidence", aegis::BuildDataQualityScoreRows(state_));
+            ImGui::Spacing();
+            RenderInfoTable("Saved Layouts", aegis::BuildSavedLayoutRows());
+            ImGui::Spacing();
+            RenderInfoTable("Import / Export Workflow", aegis::BuildImportExportWorkflowRows());
+            ImGui::Spacing();
+            RenderInfoTable("Onboarding", aegis::BuildOnboardingWorkflowRows(config_, state_, holdings_));
+            }
+            auralith::ui::EndCard();
+        }
+
+        void RenderStrategyLab()
+        {
+            const aegis::StockQuote* quote = FindExactQuote(selected_symbol_);
+            std::vector<aegis::Candle> candles;
+            if (quote != nullptr)
+            {
+                candles = history_symbol_ == quote->symbol && !history_result_.candles.empty()
+                    ? history_result_.candles
+                    : aegis::BuildSyntheticCandles(*quote, std::max(180, chart_days_));
+            }
+
+            auralith::ui::PageHeader({ "Strategy Lab", "Design, test, compare, and monitor paper strategies with explicit risk limits.", {}, "", auralith::ui::Tone::Info });
+            ImGui::InputText("Rule", strategy_rule_buffer_, sizeof(strategy_rule_buffer_));
+            ImGui::SameLine();
+            if (SmallActionButton("Backtest"))
+            {
+                status_ = "Strategy Lab refreshed with closed-candle backtest context.";
+                Audit("strategy_lab_backtest", selected_symbol_, strategy_rule_buffer_);
+            }
+            ImGui::SameLine();
+            if (SmallActionButton("Save Preset"))
+            {
+                status_ = "Strategy preset staged. Export/import support is tracked in the workflow plan.";
+                Audit("strategy_preset_staged", selected_symbol_, strategy_rule_buffer_);
+            }
+
+            ImGui::Spacing();
+            if (auralith::ui::BeginCard("strategy_left", "Rule Builder", "Closed-candle strategy workflow, backtest context, and paper simulation inputs.", ImVec2(ImGui::GetContentRegionAvail().x * 0.56f, 0), true))
+            {
+            RenderInfoTable("Strategy Lab Workflow", aegis::BuildStrategyLabWorkflowRows(config_, state_, trade_plans_, candles));
+            ImGui::Spacing();
+            if (!candles.empty())
+            {
+                const aegis::StrategyBacktestResult strategy_backtest = aegis::RunStrategyRuleBacktest(candles, strategy_rule_buffer_, strategy_fee_bps_, strategy_slippage_bps_);
+                RenderInfoTable("Current Rule Backtest", strategy_backtest.backtest.rows);
+                ImGui::TextWrapped("%s", strategy_backtest.status.c_str());
+            }
+            }
+            auralith::ui::EndCard();
+
+            ImGui::SameLine();
+            if (auralith::ui::BeginCard("strategy_right", "Signals And Simulator", "Active scanner signals, paper broker preview, and cautious AI explanations.", ImVec2(0, 0), true))
+            {
+            RenderInfoTable("Active Signals", aegis::BuildSignalEngineRows(state_));
+            ImGui::Spacing();
+            RenderInfoTable("Paper Simulator", quote != nullptr ? aegis::SubmitPaperOrder(config_, *quote, { quote->symbol, aegis::PaperOrderSide::Buy, 5.0, quote->price, 25.0, true, false }).rows : std::vector<aegis::InfoItem>{});
+            ImGui::Spacing();
+            RenderInfoTable("AI Explanation Layer", aegis::BuildAiExplanationLayerRows(state_, selected_symbol_));
+            }
+            auralith::ui::EndCard();
+        }
+
+        void RenderRiskConsole()
+        {
+            auralith::ui::PageHeader({
+                "Portfolio Risk Console",
+                "Exposure, concentration, stop coverage, drawdown, beta, overlap, and paper risk states.",
+                {
+                    { aegis::CurrentRiskStateLabel(config_), auralith::ui::Tone::Warning, "Current risk state from Auralith's safety posture.", "R" },
+                    { "Manual Review", auralith::ui::Tone::Info, "Risk changes are research prompts, not live order instructions.", "M" }
+                },
+                "",
+                auralith::ui::Tone::Info
+            });
+            if (auralith::ui::BeginCard("risk_console_left", "Risk State", "Portfolio exposure, concentration, stop coverage, drawdown, beta, and overlap.", ImVec2(ImGui::GetContentRegionAvail().x * 0.52f, 0), true))
+            {
+            RenderInfoTable("Risk Console", aegis::BuildPortfolioRiskConsoleRows(config_, state_, holdings_, price_alerts_));
+            ImGui::Spacing();
+            RenderRiskUpgradePanel();
+            }
+            auralith::ui::EndCard();
+
+            ImGui::SameLine();
+            if (auralith::ui::BeginCard("risk_console_right", "Narrative And Quality", "Risk explanations, correlation placeholder, and data quality confidence.", ImVec2(0, 0), true))
+            {
+            RenderInfoTable("Risk Narrative", aegis::BuildRiskNarrativeRows(config_, state_, holdings_));
+            ImGui::Spacing();
+            RenderCorrelationMatrix();
+            ImGui::Spacing();
+            RenderInfoTable("Risk Data Quality", aegis::BuildDataQualityScoreRows(state_));
+            }
+            auralith::ui::EndCard();
+        }
+
+        void RenderSymbolResearchPage()
+        {
+            const aegis::StockQuote* quote = FindExactQuote(selected_symbol_);
+            const aegis::StockSignal* signal = FindExactSignal(selected_symbol_);
+            auralith::ui::PageHeader({
+                selected_symbol_.empty() ? std::string("Symbol Research") : selected_symbol_ + " Research Page",
+                "Overview, chart, signals, fundamentals, earnings, news, SEC, options, backtests, ETF exposure, journal, paper trades, and alerts.",
+                {
+                    { quote != nullptr && !quote->fallback ? "Provider data" : "Fallback/Demo", quote != nullptr && !quote->fallback ? auralith::ui::Tone::Info : auralith::ui::Tone::Warning, "Selected symbol data source state.", "D" },
+                    { signal != nullptr ? signal->setup_type : "No setup", signal != nullptr ? auralith::ui::Tone::Purple : auralith::ui::Tone::Muted, "Scanner setup classification.", "S" }
+                },
+                "",
+                auralith::ui::Tone::Info
+            });
+
+            const char* tabs[] = { "Overview", "Chart", "Signals", "Fundamentals", "Earnings/News/SEC", "Options/Volatility", "Backtests", "ETF Exposure", "Journal", "Paper Trades", "Alerts" };
+            ImGui::SetNextItemWidth(220.0f);
+            ImGui::Combo("Section", &symbol_research_tab_, tabs, IM_ARRAYSIZE(tabs));
+            ImGui::SameLine();
+            if (SmallActionButton("Open In Chart Lab"))
+                selected_tab_ = 5;
+            ImGui::SameLine();
+            if (SmallActionButton("Create Alert"))
+            {
+                SetBuffer(alert_symbol_buffer_, sizeof(alert_symbol_buffer_), selected_symbol_);
+                selected_tab_ = 4;
+            }
+
+            ImGui::Spacing();
+            if (auralith::ui::BeginCard("symbol_research_left", "Research Timeline", "Summary, explanations, and data quality confidence for the selected symbol.", ImVec2(ImGui::GetContentRegionAvail().x * 0.55f, 0), true))
+            {
+            RenderInfoTable("Symbol Research Summary", aegis::BuildSymbolResearchPageRows(config_, state_, selected_symbol_, holdings_, price_alerts_, trade_plans_, symbol_notes_, journal_entries_));
+            ImGui::Spacing();
+            RenderInfoTable("Why / What Changed / Invalidation", aegis::BuildAiExplanationLayerRows(state_, selected_symbol_));
+            ImGui::Spacing();
+            RenderInfoTable("Symbol Data Quality", aegis::BuildDataQualityScoreRows(state_, selected_symbol_));
+            }
+            auralith::ui::EndCard();
+
+            ImGui::SameLine();
+            if (auralith::ui::BeginCard("symbol_research_right", "Symbol Workspace", "Focused research surface for chart, signals, fundamentals, events, and notes.", ImVec2(0, 0), true))
+            {
+            if (quote == nullptr)
+            {
+                auralith::ui::EmptyState({ "Q", "No symbol selected.", "Select a symbol from the watchlist or scanner to open a full research page.", "Open scanner" });
+            }
+            else
+            {
+                switch (std::clamp(symbol_research_tab_, 0, 10))
+                {
+                case 1:
+                    PlotHistory(quote->history, ImVec2(0, 170.0f));
+                    RenderInfoTable("Chart Quality", aegis::BuildQuoteDataQualityRows(*quote));
+                    break;
+                case 2:
+                    if (signal != nullptr)
+                        RenderInfoTable("Signal Factors", signal->factors);
+                    RenderInfoTable("Scanner Explanation", aegis::BuildAiExplanationLayerRows(state_, selected_symbol_));
+                    break;
+                case 3:
+                    RenderInfoTable("Fundamentals", aegis::BuildModelExplanation(*quote, signal != nullptr ? *signal : aegis::StockSignal{}, aegis::BuildIndicators(aegis::BuildSyntheticCandles(*quote, 90), FindExactQuote("SPY"), FindExactQuote("QQQ"))));
+                    break;
+                case 4:
+                    EnsureResearchLoad(*quote);
+                    RenderInfoTable("Event Calendar", aegis::BuildMarketNarrativeRows(state_));
+                    TextMuted(research_status_.c_str());
+                    break;
+                case 5:
+                    RenderInfoTable("Options / Volatility", aegis::BuildRiskCritic(*quote, signal != nullptr ? *signal : aegis::StockSignal{}, aegis::BuildIndicators(aegis::BuildSyntheticCandles(*quote, 90), FindExactQuote("SPY"), FindExactQuote("QQQ"))));
+                    break;
+                case 6:
+                    RenderInfoTable("Backtests", aegis::RunSignalBacktest(aegis::BuildSyntheticCandles(*quote, 180), "Momentum").rows);
+                    break;
+                case 7:
+                    RenderEtfExposure(quote->symbol);
+                    break;
+                case 8:
+                    RenderJournalPanel();
+                    break;
+                case 9:
+                    RenderTradePlansTable();
+                    break;
+                case 10:
+                    RenderPriceAlertsPanel();
+                    break;
+                default:
+                    RenderSelectedSymbol();
+                    break;
+                }
+            }
+            }
+            auralith::ui::EndCard();
         }
 
         void RenderWatchlist()
         {
-            SectionTitle("Watchlist", "Add symbols, filter sectors, and inspect quote tape.");
-            ImGui::SetNextItemWidth(150.0f);
-            ImGui::InputTextWithHint("##symbol_add", "Ticker", symbol_buffer_, sizeof(symbol_buffer_));
+            auralith::ui::PageHeader({ "Watchlist", "Add symbols, filter sectors, and inspect quote tape with provider freshness attached.", {}, "", auralith::ui::Tone::Info });
+            auralith::ui::SearchInput("##symbol_add", "Ticker", symbol_buffer_, sizeof(symbol_buffer_), 150.0f);
             ImGui::SameLine();
             if (SmallActionButton("Add"))
                 AddSymbolFromBuffer();
@@ -974,36 +1454,56 @@ namespace
 
             ImGui::Spacing();
             const std::string filter = QuoteFilterKey();
-            ImGui::BeginChild("watch_table", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.58f), true);
-            RenderQuoteTable("watch_quotes", aegis::FilterQuotes(state_, filter, search_buffer_), 14);
-            ImGui::EndChild();
+            if (auralith::ui::BeginCard("watch_table", "Quote Tape", "Dense market table for symbols currently in scope.", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.58f), true))
+            {
+                RenderQuoteTable("watch_quotes", aegis::FilterQuotes(state_, filter, search_buffer_), 14);
+            }
+            auralith::ui::EndCard();
 
             ImGui::Spacing();
-            ImGui::BeginChild("watch_detail", ImVec2(0, 0), true);
-            RenderSelectedSymbol();
-            ImGui::EndChild();
+            if (auralith::ui::BeginCard("watch_detail", "Research Context", "Selected-symbol details, signal thesis, and paper-plan boundaries.", ImVec2(0, 0), true))
+            {
+                RenderSelectedSymbol();
+            }
+            auralith::ui::EndCard();
         }
 
         void RenderScanner()
         {
-            SectionTitle("AI Scanner", "Rule-based conviction board for the current watchlist.");
+            auralith::ui::PageHeader({
+                "AI Scanner",
+                "Momentum setup board for paper plans, invalidation, and manual review.",
+                {
+                    { std::to_string(state_.signals.size()) + " symbols", auralith::ui::Tone::Info, "Signals currently available in the scanner engine.", "S" },
+                    { config_.paper_only_mode ? "Paper-only" : "Safety review", config_.paper_only_mode ? auralith::ui::Tone::Info : auralith::ui::Tone::Warning, "Scanner creates paper research plans only.", "P" }
+                },
+                "",
+                auralith::ui::Tone::Info
+            });
             ImGui::SetNextItemWidth(170.0f);
-            const char* filters[] = { "All", "Eligible", "Bullish", "Risk", "Hold", "Wait" };
+            const char* filters[] = { "All", "Review Queue", "Paper Setup", "Risk", "Neutral", "Weak" };
             ImGui::Combo("##signal_filter", &signal_filter_, filters, IM_ARRAYSIZE(filters));
             ImGui::SameLine();
-            TextMuted("Signals are research aids, not trade instructions.");
+            TextMuted("Setups are paper-only research plans and require manual confirmation.");
 
             ImGui::Spacing();
             const std::vector<int> indexes = aegis::FilterSignalIndexes(state_, SignalFilterKey(), search_buffer_);
-            if (ImGui::BeginTable("signals", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 0)))
+            if (indexes.empty())
+            {
+                auralith::ui::EmptyState({ "S", "No scanner setups match this filter.", "Try a broader filter or refresh providers. Any setup remains paper-only and requires manual review.", "Refresh" });
+                return;
+            }
+
+            if (auralith::ui::BeginDataTable("signals", 9, ImVec2(0, 0), ImGuiTableFlags_SizingStretchProp))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Rating", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                ImGui::TableSetupColumn("Setup", ImGuiTableColumnFlags_WidthFixed, 170.0f);
                 ImGui::TableSetupColumn("Score", ImGuiTableColumnFlags_WidthFixed, 150.0f);
                 ImGui::TableSetupColumn("Risk", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                ImGui::TableSetupColumn("Target", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                ImGui::TableSetupColumn("Entry", ImGuiTableColumnFlags_WidthFixed, 100.0f);
                 ImGui::TableSetupColumn("Stop", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                ImGui::TableSetupColumn("Horizon", ImGuiTableColumnFlags_WidthFixed, 95.0f);
+                ImGui::TableSetupColumn("Sell Zone", ImGuiTableColumnFlags_WidthFixed, 160.0f);
+                ImGui::TableSetupColumn("R/R", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                 ImGui::TableSetupColumn("Thesis");
                 ImGui::TableHeadersRow();
 
@@ -1015,7 +1515,7 @@ namespace
                     if (ImGui::Selectable(signal.symbol.c_str(), selected_symbol_ == signal.symbol, ImGuiSelectableFlags_SpanAllColumns))
                         selected_symbol_ = signal.symbol;
                     ImGui::TableNextColumn();
-                    ImGui::TextUnformatted(signal.rating.c_str());
+                    ImGui::TextUnformatted(signal.setup_type.c_str());
                     ImGui::TableNextColumn();
                     DrawScorePill(signal.score, ImVec2(110.0f, 11.0f));
                     ImGui::SameLine();
@@ -1023,21 +1523,32 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted(signal.risk.c_str());
                     ImGui::TableNextColumn();
-                    ImGui::TextUnformatted(aegis::FormatCurrency(signal.target_price).c_str());
+                    ImGui::TextUnformatted(aegis::FormatCurrency(signal.entry_price).c_str());
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted(aegis::FormatCurrency(signal.stop_level).c_str());
                     ImGui::TableNextColumn();
-                    ImGui::TextUnformatted(signal.horizon.c_str());
+                    ImGui::TextUnformatted(signal.expected_sell_zone.empty() ? aegis::FormatCurrency(signal.target_price).c_str() : signal.expected_sell_zone.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%.1fR", signal.risk_reward);
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", signal.thesis.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
         void RenderPortfolio()
         {
-            SectionTitle("Portfolio", "Persistent holdings, live quote marks, and paper risk sizing.");
+            auralith::ui::PageHeader({
+                "Portfolio",
+                "Persistent paper holdings, live quote marks, allocation checks, and risk sizing.",
+                {
+                    { config_.paper_only_mode ? "Paper Mode: ON" : "Paper Mode: Review", config_.paper_only_mode ? auralith::ui::Tone::Info : auralith::ui::Tone::Warning, "Portfolio workflows are paper-first.", "P" },
+                    { aegis::CurrentRiskStateLabel(config_), auralith::ui::Tone::Info, "Current central safety posture.", "R" }
+                },
+                "",
+                auralith::ui::Tone::Info
+            });
 
             const PortfolioTotals totals = CalculatePortfolioTotals();
             MetricCard({"Market value", "", aegis::FormatCurrency(totals.market_value), "", "Current value of saved holdings using the loaded quote board."}, ImVec2(210.0f, 108.0f));
@@ -1049,59 +1560,60 @@ namespace
             MetricCard({"Cash model", "", aegis::FormatCurrency(config_.portfolio_cash), "", "Paper cash available for sizing and exposure checks."}, ImVec2(210.0f, 108.0f));
 
             ImGui::Spacing();
-            ImGui::BeginChild("holdings_editor", ImVec2(360.0f, 0), true);
-            SectionTitle("Holdings Editor");
-            ImGui::InputText("Symbol", holding_symbol_buffer_, sizeof(holding_symbol_buffer_));
-            ImGui::InputDouble("Shares", &holding_shares_, 1.0, 10.0, "%.4f");
-            ImGui::InputDouble("Avg cost", &holding_average_cost_, 1.0, 10.0, "%.2f");
-            ImGui::InputTextMultiline("Note", holding_note_buffer_, sizeof(holding_note_buffer_), ImVec2(0, 70.0f));
-            if (SmallActionButton(selected_holding_index_ >= 0 ? "Update Holding" : "Add Holding"))
-                SaveHoldingFromEditor();
-            ImGui::SameLine();
-            if (SmallActionButton("Clear"))
-                ClearHoldingEditor();
-            if (selected_holding_index_ >= 0)
+            if (auralith::ui::BeginCard("holdings_editor", "Holdings Editor", "Add or update simulated portfolio positions.", ImVec2(360.0f, 0), true))
             {
+                ImGui::InputText("Symbol", holding_symbol_buffer_, sizeof(holding_symbol_buffer_));
+                ImGui::InputDouble("Shares", &holding_shares_, 1.0, 10.0, "%.4f");
+                ImGui::InputDouble("Avg cost", &holding_average_cost_, 1.0, 10.0, "%.2f");
+                ImGui::InputTextMultiline("Note", holding_note_buffer_, sizeof(holding_note_buffer_), ImVec2(0, 70.0f));
+                if (SmallActionButton(selected_holding_index_ >= 0 ? "Update Holding" : "Add Holding"))
+                    SaveHoldingFromEditor();
                 ImGui::SameLine();
-                if (SmallActionButton("Remove"))
-                    RemoveSelectedHolding();
+                if (SmallActionButton("Clear"))
+                    ClearHoldingEditor();
+                if (selected_holding_index_ >= 0)
+                {
+                    ImGui::SameLine();
+                    if (SmallActionButton("Remove"))
+                        RemoveSelectedHolding();
+                }
+                ImGui::Separator();
+                SectionTitle("Risk Settings");
+                ImGui::InputDouble("Paper cash", &config_.portfolio_cash, 100.0, 1000.0, "%.2f");
+                ImGui::InputDouble("Max position", &config_.max_position_amount, 100.0, 500.0, "%.2f");
+                ImGui::SliderInt("Min conviction", &config_.min_conviction, 1, 99);
+                ImGui::SliderScalar("Risk percent", ImGuiDataType_Double, &config_.max_portfolio_risk_percent, &risk_min_, &risk_max_, "%.2f%%");
+                auralith::ui::Toggle("Paper Mode", &config_.paper_only_mode, "Live execution stays locked unless intentionally enabled outside this UI.");
+                auralith::ui::Toggle("Manual Confirmation", &config_.require_manual_confirmation, "Every paper execution plan requires explicit review.");
+                if (SmallActionButton("Save Risk Settings"))
+                {
+                    SyncConfigFromBuffers();
+                    if (aegis::SaveConfig(config_))
+                        status_ = "Risk settings saved.";
+                    BeginRefresh(false);
+                    Audit("risk_settings_saved", "", "");
+                }
+                ImGui::Spacing();
+                if (SmallActionButton("Export Journal Snapshot"))
+                    ExportJournal();
             }
-            ImGui::Separator();
-            SectionTitle("Risk Settings");
-            ImGui::InputDouble("Paper cash", &config_.portfolio_cash, 100.0, 1000.0, "%.2f");
-            ImGui::InputDouble("Max position", &config_.max_position_amount, 100.0, 500.0, "%.2f");
-            ImGui::SliderInt("Min conviction", &config_.min_conviction, 1, 99);
-            ImGui::SliderScalar("Risk percent", ImGuiDataType_Double, &config_.max_portfolio_risk_percent, &risk_min_, &risk_max_, "%.2f%%");
-            ImGui::Checkbox("Paper only mode", &config_.paper_only_mode);
-            ImGui::Checkbox("Manual confirmation", &config_.require_manual_confirmation);
-            if (SmallActionButton("Save Risk Settings"))
-            {
-                SyncConfigFromBuffers();
-                if (aegis::SaveConfig(config_))
-                    status_ = "Risk settings saved.";
-                BeginRefresh(false);
-                Audit("risk_settings_saved", "", "");
-            }
-            ImGui::Spacing();
-            if (SmallActionButton("Export Journal Snapshot"))
-                ExportJournal();
-            ImGui::EndChild();
+            auralith::ui::EndCard();
 
             ImGui::SameLine();
             ImGui::BeginChild("portfolio_detail", ImVec2(0, 0), false);
-            ImGui::BeginChild("holdings_table", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.36f), true);
-            RenderHoldingsTable(totals);
-            ImGui::EndChild();
+            if (auralith::ui::BeginCard("holdings_table", "Holdings", "Paper portfolio positions marked against the current quote board.", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.36f), true))
+                RenderHoldingsTable(totals);
+            auralith::ui::EndCard();
 
             ImGui::Spacing();
-            ImGui::BeginChild("trade_plans", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.46f), true);
-            RenderTradePlansTable();
-            ImGui::EndChild();
+            if (auralith::ui::BeginCard("trade_plans", "Paper Trade Plans", "Entry, invalidation, target, and audit-ready paper plan state.", ImVec2(0, ImGui::GetContentRegionAvail().y * 0.46f), true))
+                RenderTradePlansTable();
+            auralith::ui::EndCard();
 
             ImGui::Spacing();
-            ImGui::BeginChild("risk_detail", ImVec2(0, 0), true);
-            RenderSizingWorksheet();
-            ImGui::EndChild();
+            if (auralith::ui::BeginCard("risk_detail", "Sizing Worksheet", "Position size, stop logic, and max simulated loss.", ImVec2(0, 0), true))
+                RenderSizingWorksheet();
+            auralith::ui::EndCard();
             ImGui::EndChild();
         }
 
@@ -1111,6 +1623,10 @@ namespace
             ImGui::BeginChild("research_left", ImVec2(ImGui::GetContentRegionAvail().x * 0.50f, 0), true);
             RenderInfoTable("Research", state_.research);
             ImGui::Spacing();
+            RenderInfoTable("Market Narrative", aegis::BuildMarketNarrativeRows(state_));
+            ImGui::Spacing();
+            RenderInfoTable("Watchlist Analyst", aegis::BuildWatchlistAnalystRows(state_));
+            ImGui::Spacing();
             RenderInfoTable("Alerts", state_.alerts);
             ImGui::EndChild();
 
@@ -1119,6 +1635,10 @@ namespace
             RenderPriceAlertsPanel();
             ImGui::Spacing();
             RenderInfoTable("Portfolio", state_.portfolio);
+            ImGui::Spacing();
+            RenderInfoTable("Portfolio Narrative", aegis::BuildPortfolioReviewRows(state_, holdings_));
+            ImGui::Spacing();
+            RenderInfoTable("Risk Narrative", aegis::BuildRiskNarrativeRows(config_, state_, holdings_));
             ImGui::Spacing();
             RenderInfoTable("Rules", state_.rules);
             ImGui::EndChild();
@@ -1130,8 +1650,8 @@ namespace
             const aegis::StockSignal* signal = FindExactSignal(selected_symbol_);
             if (quote == nullptr || signal == nullptr)
             {
-                SectionTitle("Chart Lab");
-                TextMuted("Select a symbol from the dashboard, watchlist, or scanner.");
+                auralith::ui::PageHeader({ "Chart Lab", "Premium charting surface for candles, indicators, targets, stops, and provider freshness.", {}, "", auralith::ui::Tone::Info });
+                auralith::ui::EmptyState({ "C", "No symbol selected.", "Select a symbol from the dashboard, watchlist, or scanner to open the chart lab.", "Open watchlist" });
                 return;
             }
 
@@ -1164,7 +1684,17 @@ namespace
                 : aegis::BuildEarnings(quote->symbol);
             const aegis::OptionSnapshot options = aegis::BuildOptionSnapshot(*quote);
 
-            SectionTitle((quote->symbol + " Chart Lab").c_str(), "Candles, indicators, backtests, filings, news, earnings, and explainable model checks.");
+            auralith::ui::PageHeader({
+                quote->symbol + " Chart Lab",
+                "Candles, indicators, backtests, filings, news, earnings, and explainable model checks.",
+                {
+                    { quote->fallback ? "Fallback data" : "Provider data", quote->fallback ? auralith::ui::Tone::Warning : auralith::ui::Tone::Info, "Source/freshness label for the selected chart bundle.", "D" },
+                    { aegis::CandleAggregationName(chart_aggregation), auralith::ui::Tone::Info, "Current chart aggregation interval.", "T" },
+                    { signal->paper_only ? "Paper Plan" : "Review Setup", auralith::ui::Tone::Purple, "Chart lab promotes only paper plans with manual review.", "P" }
+                },
+                "",
+                auralith::ui::Tone::Info
+            });
             ImGui::SetNextItemWidth(150.0f);
             bool chart_layout_changed = false;
             if (ImGui::SliderInt("Visible days", &chart_days_, 30, 1260))
@@ -1201,15 +1731,23 @@ namespace
             ImGui::SameLine();
             TextMuted((std::to_string(static_cast<int>(daily_candles.size())) + " daily / " + std::to_string(static_cast<int>(candles.size())) + " " + aegis::CandleAggregationName(chart_aggregation) + " bars").c_str());
             ImGui::SameLine();
-            indicator_layout_changed |= ImGui::Checkbox("Volume", &show_chart_volume_);
+            const auto compact_toggle = [&](const char* label, bool& value) {
+                const std::string button_label = std::string(label) + (value ? ": ON" : ": OFF");
+                if (auralith::ui::Button(button_label.c_str(), value ? auralith::ui::ButtonVariant::Secondary : auralith::ui::ButtonVariant::Ghost, ImVec2(0.0f, 30.0f)))
+                {
+                    value = !value;
+                    indicator_layout_changed = true;
+                }
+            };
+            compact_toggle("Volume", show_chart_volume_);
             ImGui::SameLine();
-            indicator_layout_changed |= ImGui::Checkbox("Trend SMA/EMA", &show_trend_indicators_);
+            compact_toggle("Trend", show_trend_indicators_);
             ImGui::SameLine();
-            indicator_layout_changed |= ImGui::Checkbox("Momentum RSI/MACD", &show_momentum_indicators_);
+            compact_toggle("Momentum", show_momentum_indicators_);
             ImGui::SameLine();
-            indicator_layout_changed |= ImGui::Checkbox("Volatility BB/ATR", &show_volatility_indicators_);
+            compact_toggle("Volatility", show_volatility_indicators_);
             ImGui::SameLine();
-            indicator_layout_changed |= ImGui::Checkbox("Relative SPY/QQQ", &show_relative_indicators_);
+            compact_toggle("Relative", show_relative_indicators_);
             if (chart_layout_changed || indicator_layout_changed)
                 SaveSessionState();
             TextMuted(research_status_.c_str());
@@ -1246,14 +1784,15 @@ namespace
             }
 
             ImGui::Spacing();
-            ImGui::BeginChild("chart_canvas_panel", ImVec2(ImGui::GetContentRegionAvail().x * 0.62f, 316.0f), true);
-            PlotCandleChart(candles, chart_days_, show_chart_volume_, ImVec2(ImGui::GetContentRegionAvail().x, 286.0f));
-            ImGui::EndChild();
+            if (auralith::ui::BeginCard("chart_canvas_panel", "Price Action", "Candles, volume, target/stop context, and selected-point tooltip.", ImVec2(ImGui::GetContentRegionAvail().x * 0.62f, 316.0f), true))
+                PlotCandleChart(candles, chart_days_, show_chart_volume_, ImVec2(ImGui::GetContentRegionAvail().x, 286.0f));
+            auralith::ui::EndCard();
             ImGui::SameLine();
-            ImGui::BeginChild("chart_metrics_panel", ImVec2(0, 316.0f), true);
+            if (auralith::ui::BeginCard("chart_metrics_panel", "Indicator Stack", "Trend, momentum, volatility, and relative strength overlays.", ImVec2(0, 316.0f), true))
+            {
             DrawLabeledValue("Regime", indicators.regime, "Model confidence decays when market data is stale or volatility expands.");
             ImGui::Separator();
-            if (ImGui::BeginTable("indicator_snapshot", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (auralith::ui::BeginDataTable("indicator_snapshot", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Indicator", ImGuiTableColumnFlags_WidthFixed, 120.0f);
                 ImGui::TableSetupColumn("Value");
@@ -1293,12 +1832,14 @@ namespace
                 }
                 if (!rendered_indicator)
                     row("Indicators", "Disabled for this layout");
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
-            ImGui::EndChild();
+            }
+            auralith::ui::EndCard();
 
             ImGui::Spacing();
-            ImGui::BeginChild("chart_lower_left", ImVec2(ImGui::GetContentRegionAvail().x * 0.50f, 0), true);
+            if (auralith::ui::BeginCard("chart_lower_left", "Research Analytics", "Backtests, strategy rules, explanations, and risk narratives.", ImVec2(ImGui::GetContentRegionAvail().x * 0.50f, 0), true))
+            {
             SectionTitle("Backtest Snapshot", "Synthetic candle test of the selected signal rule.");
             MetricCard({ "Trades", "", std::to_string(backtest.trades), "", "Completed historical signal windows." }, ImVec2(158.0f, 94.0f));
             ImGui::SameLine();
@@ -1309,6 +1850,8 @@ namespace
             MetricCard({ "Max drawdown", "", aegis::FormatPercent(backtest.max_drawdown), "", "Worst equity dip during test." }, ImVec2(158.0f, 94.0f));
             ImGui::Spacing();
             RenderInfoTable("Backtest Detail", backtest.rows);
+            ImGui::Spacing();
+            RenderInfoTable("Analytics Engine", aegis::BuildAnalyticsEngineRows(candles, quote->symbol));
             ImGui::Spacing();
             SectionTitle("Strategy Builder", "Rules use closed candle data and enter on the next open.");
             ImGui::InputText("Rule##strategy_builder", strategy_rule_buffer_, sizeof(strategy_rule_buffer_));
@@ -1329,17 +1872,21 @@ namespace
             }
 
             ImGui::Spacing();
+            RenderInfoTable("Research Narrative", aegis::BuildResearchNarrativeRows(*quote, *signal, indicators));
+            ImGui::Spacing();
             RenderInfoTable("Explainable Score", aegis::BuildModelExplanation(*quote, *signal, indicators));
             ImGui::Spacing();
             RenderInfoTable("Risk Critic", aegis::BuildRiskCritic(*quote, *signal, indicators));
             ImGui::Spacing();
             RenderInfoTable("Similar Setups", aegis::BuildSimilarSetups(*quote, indicators));
-            ImGui::EndChild();
+            }
+            auralith::ui::EndCard();
 
             ImGui::SameLine();
-            ImGui::BeginChild("chart_lower_right", ImVec2(0, 0), true);
+            if (auralith::ui::BeginCard("chart_lower_right", "Fundamentals And Events", "Provider-backed company context, filings, news, and earnings.", ImVec2(0, 0), true))
+            {
             SectionTitle("Fundamentals", quote->fundamentals_estimated ? "Estimated until provider-backed fundamentals sync." : "Provider-backed values where available.");
-            if (ImGui::BeginTable("fundamentals_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (auralith::ui::BeginDataTable("fundamentals_table", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Metric");
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 115.0f);
@@ -1361,7 +1908,7 @@ namespace
                 frow("Free cash flow", aegis::FormatCompactCurrency(fundamentals.free_cash_flow), "Cash generation");
                 frow("P/E / PEG", aegis::FormatPercent(fundamentals.pe) + " / " + aegis::FormatPercent(fundamentals.peg), "Valuation");
                 frow("Dividend", aegis::FormatPercent(fundamentals.dividend_yield), "Income contribution");
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
             ImGui::TextWrapped("%s", fundamentals.summary.c_str());
 
@@ -1371,7 +1918,8 @@ namespace
             RenderEtfExposure(quote->symbol);
             ImGui::Spacing();
             RenderFilingsNewsEarnings(options, filings, news, earnings);
-            ImGui::EndChild();
+            }
+            auralith::ui::EndCard();
         }
 
         void RenderCompare()
@@ -1409,7 +1957,7 @@ namespace
             SetBuffer(compare_symbols_buffer_, sizeof(compare_symbols_buffer_), aegis::JoinWatchlist(symbols));
 
             ImGui::Spacing();
-            if (ImGui::BeginTable("compare_summary", 10, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollX))
+            if (auralith::ui::BeginDataTable("compare_summary", 10, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollX))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 82.0f);
                 ImGui::TableSetupColumn("Price", ImGuiTableColumnFlags_WidthFixed, 92.0f);
@@ -1452,7 +2000,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted(quote ? quote->source.c_str() : "Missing");
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
 
             ImGui::Spacing();
@@ -1491,7 +2039,8 @@ namespace
                 ImGui::Separator();
                 DrawLabeledValue("RSI / ATR", aegis::FormatPercent(indicators.rsi14) + " / " + aegis::FormatCurrency(indicators.atr14), indicators.regime);
                 DrawLabeledValue("P/E / Dividend", aegis::FormatPercent(fundamentals.pe) + " / " + aegis::FormatPercent(fundamentals.dividend_yield), "Fundamental snapshot.");
-                DrawLabeledValue("Risk/reward", aegis::FormatCurrency(signal->stop_level) + " -> " + aegis::FormatCurrency(signal->target_price), signal->risk);
+                DrawLabeledValue("Paper setup", aegis::FormatCurrency(signal->entry_price) + " entry / " + aegis::FormatCurrency(signal->stop_level) + " stop / " + signal->expected_sell_zone + " zone", signal->setup_type);
+                DrawLabeledValue("Trailing plan", aegis::FormatCurrency(signal->trailing_stop_level), "2x ATR below highest close");
                 if (SmallActionButton("Open Chart"))
                 {
                     selected_symbol_ = quote->symbol;
@@ -1503,7 +2052,7 @@ namespace
 
             ImGui::Spacing();
             SectionTitle("Return Correlation");
-            if (ImGui::BeginTable("compare_correlation", static_cast<int>(symbols.size()) + 1, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollX))
+            if (auralith::ui::BeginDataTable("compare_correlation", static_cast<int>(symbols.size()) + 1, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollX))
             {
                 ImGui::TableSetupColumn("");
                 for (const std::string& symbol : symbols)
@@ -1521,7 +2070,7 @@ namespace
                         TextValueColored(corr >= 0.0 ? 1.0 : -1.0, std::to_string(static_cast<int>(corr * 100.0) / 100.0));
                     }
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -1564,7 +2113,7 @@ namespace
             {
                 ImGui::Spacing();
                 SectionTitle("Last Import Issues");
-                if (ImGui::BeginTable("ImportIssues", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
+                if (auralith::ui::BeginDataTable("ImportIssues", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
                 {
                     ImGui::TableSetupColumn("File");
                     ImGui::TableSetupColumn("Row");
@@ -1583,7 +2132,7 @@ namespace
                         ImGui::TableSetColumnIndex(3);
                         ImGui::TextWrapped("%s", issue.reason.c_str());
                     }
-                    ImGui::EndTable();
+                    auralith::ui::EndDataTable();
                 }
             }
             ImGui::Spacing();
@@ -1593,10 +2142,19 @@ namespace
 
         void RenderIntegrations()
         {
-            SectionTitle("Integrations, Risk & Safety", "Provider health, macro context, portfolio risk, paper trading guardrails, and diagnostics.");
+            auralith::ui::PageHeader({
+                "Integrations, Risk & Safety",
+                "Provider health, macro context, portfolio risk, paper execution guardrails, and diagnostics.",
+                {
+                    { state_.source_badge, auralith::ui::Tone::Info, state_.market_status, "P" },
+                    { config_.paper_only_mode ? "Paper Mode: ON" : "Paper Mode: Review", config_.paper_only_mode ? auralith::ui::Tone::Info : auralith::ui::Tone::Warning, "Paper execution boundary.", "S" }
+                },
+                "",
+                auralith::ui::Tone::Info
+            });
             if (show_setup_wizard_)
             {
-                ImGui::BeginChild("setup_wizard", ImVec2(0, 140.0f), true);
+                auralith::ui::BeginCard("setup_wizard", "First-run Setup", "Provider key, starter watchlist, and local-first onboarding.", ImVec2(0, 148.0f), true);
                 SectionTitle("First-run Setup");
                 ImGui::InputText("Alpha Vantage key##wizard", api_key_buffer_, sizeof(api_key_buffer_), ImGuiInputTextFlags_Password);
                 ImGui::InputTextMultiline("Starter watchlist##wizard", watchlist_buffer_, sizeof(watchlist_buffer_), ImVec2(0, 48.0f));
@@ -1611,14 +2169,15 @@ namespace
                 ImGui::SameLine();
                 if (SmallActionButton("Skip"))
                     show_setup_wizard_ = false;
-                ImGui::EndChild();
+                auralith::ui::EndCard();
                 ImGui::Spacing();
             }
 
-            ImGui::BeginChild("integration_left", ImVec2(ImGui::GetContentRegionAvail().x * 0.52f, 0), true);
+            if (auralith::ui::BeginCard("integration_left", "Provider Layer", "Provider routing, freshness, macro context, diagnostics, cache state, and storage systems.", ImVec2(ImGui::GetContentRegionAvail().x * 0.52f, 0), true))
+            {
             SectionTitle("Provider Layer");
             const std::vector<aegis::ProviderStatus> providers = aegis::BuildProviderStatuses(config_);
-            if (ImGui::BeginTable("provider_status", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
+            if (auralith::ui::BeginDataTable("provider_status", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
             {
                 ImGui::TableSetupColumn("Provider", ImGuiTableColumnFlags_WidthFixed, 130.0f);
                 ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 100.0f);
@@ -1640,8 +2199,16 @@ namespace
                         aegis::OpenExternalUrl(provider.url);
                     ImGui::PopID();
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
+            ImGui::Spacing();
+            RenderInfoTable("Unified Market Engine", aegis::BuildMarketEngineRows(config_, state_));
+            ImGui::Spacing();
+            RenderInfoTable("Provider Pipeline", aegis::BuildProviderPipelineRows(config_, state_));
+            ImGui::Spacing();
+            RenderInfoTable("Signal Engine", aegis::BuildSignalEngineRows(state_));
+            ImGui::Spacing();
+            RenderInfoTable("Regime Engine", aegis::BuildRegimeEngineRows(state_));
             ImGui::Spacing();
             RenderInfoTable("Provider Controls", aegis::BuildProviderControlRows(config_));
             ImGui::Spacing();
@@ -1654,7 +2221,7 @@ namespace
             RenderInfoTable("Rate-Limit Events", aegis::BuildProviderLimitRows(32));
             ImGui::Spacing();
             SectionTitle("Macro Dashboard");
-            if (ImGui::BeginTable("macro_dashboard", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (auralith::ui::BeginDataTable("macro_dashboard", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Metric");
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 100.0f);
@@ -1673,23 +2240,25 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", item.detail.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
             ImGui::Spacing();
             RenderCorrelationMatrix();
-            ImGui::EndChild();
+            }
+            auralith::ui::EndCard();
 
             ImGui::SameLine();
-            ImGui::BeginChild("integration_right", ImVec2(0, 0), true);
+            if (auralith::ui::BeginCard("integration_right", "Safety And Operations", "Paper guardrails, data status, audit/compliance, memory, resilience, and platform readiness.", ImVec2(0, 0), true))
+            {
             RenderRiskUpgradePanel();
             ImGui::Spacing();
-            SectionTitle("Paper Trading Guardrails");
-            ImGui::Checkbox("Paper only mode", &config_.paper_only_mode);
-            ImGui::Checkbox("Manual confirmation required", &config_.require_manual_confirmation);
-            ImGui::Checkbox("Desktop notifications", &config_.notifications_enabled);
-            if (ImGui::Checkbox("Compact dashboard", &compact_mode_))
+            SectionTitle("Paper Execution Guardrails");
+            auralith::ui::Toggle("Paper Mode", &config_.paper_only_mode, "Research and paper execution stay separated from any future live broker path.");
+            auralith::ui::Toggle("Manual Confirmation Required", &config_.require_manual_confirmation, "Paper order workflows require explicit review.");
+            auralith::ui::Toggle("Desktop Notifications", &config_.notifications_enabled, "Provider, alert, report, and risk notifications.");
+            if (auralith::ui::Toggle("Compact Dashboard", &compact_mode_, "Tighten page density and sidebar spacing."))
                 PersistUiPreferences("Compact dashboard preference saved.");
-            ImGui::TextWrapped("Live order execution is disabled unless a future broker module explicitly enables it. Alpaca support is shaped for paper accounts first.");
+            ImGui::TextWrapped("Live execution is disabled unless a future broker module explicitly enables it. Alpaca support is shaped for paper accounts first.");
             if (SmallActionButton("Save Guardrails"))
             {
                 SyncConfigFromBuffers();
@@ -1700,6 +2269,22 @@ namespace
             ImGui::SameLine();
             if (SmallActionButton(validation_in_flight_ ? "Checking..." : "API Health Check"))
                 BeginValidation();
+            ImGui::Spacing();
+            RenderInfoTable("Safety Gate", aegis::BuildSafetyGateRows(config_));
+            ImGui::Spacing();
+            if (const aegis::StockQuote* selected_quote = FindExactQuote(selected_symbol_))
+            {
+                aegis::PaperOrderRequest dry_run;
+                dry_run.symbol = selected_quote->symbol;
+                dry_run.shares = 10.0;
+                dry_run.limit_price = selected_quote->price;
+                dry_run.manual_confirmed = true;
+                RenderInfoTable("Paper Simulator Dry Run", aegis::SubmitPaperOrder(config_, *selected_quote, dry_run).rows);
+                ImGui::Spacing();
+            }
+            RenderInfoTable("Portfolio Engine", aegis::BuildPortfolioEngineRows(state_, holdings_, config_.portfolio_cash));
+            ImGui::Spacing();
+            RenderInfoTable("Risk Engine", aegis::BuildRiskEngineRows(config_, state_, holdings_));
             ImGui::TextWrapped("%s", validation_status_.c_str());
             ImGui::Separator();
             SectionTitle("Data Status");
@@ -1714,6 +2299,70 @@ namespace
             if (!research_result_.fallback_reason.empty())
                 DrawLabeledValue("Research fallback", research_result_.fallback_reason, "Fallback reason from latest research load.");
             DrawLabeledValue("Diagnostics", (aegis::AppDataDirectory() / "diagnostics.jsonl").string(), "Structured provider, rate-limit, cache, and error events.");
+            ImGui::Spacing();
+            RenderInfoTable("Historical Store", aegis::BuildHistoricalStoreRows(config_));
+            ImGui::Spacing();
+            RenderInfoTable("Candle Repository", aegis::BuildCandleRepositoryRows(history_result_));
+            ImGui::Spacing();
+            RenderInfoTable("Historical Sync", aegis::BuildHistoricalSyncRows(config_, state_));
+            ImGui::Spacing();
+            RenderInfoTable("Data Retention", aegis::BuildDataRetentionRows(config_));
+            ImGui::Spacing();
+            RenderInfoTable("Audit & Compliance", aegis::BuildAuditComplianceRows(config_));
+            ImGui::Spacing();
+            RenderInfoTable("Auralith Core Database", aegis::BuildCoreDatabaseRows());
+            ImGui::Spacing();
+            RenderInfoTable("AI Symbol Memory", aegis::BuildSymbolMemoryRows(state_, symbol_notes_, journal_entries_, selected_symbol_));
+            ImGui::Spacing();
+            RenderInfoTable("AI Portfolio Memory", aegis::BuildPortfolioMemoryRows(state_, holdings_, journal_entries_));
+            ImGui::Spacing();
+            RenderInfoTable("Research Timeline", aegis::BuildResearchTimelineRows(state_, selected_symbol_, alert_events_, trade_plans_, journal_entries_, symbol_notes_));
+            ImGui::Spacing();
+            RenderInfoTable("Resilience", aegis::BuildResilienceRows(config_, state_));
+            ImGui::Spacing();
+            RenderInfoTable("Internal Metrics", aegis::BuildInternalMetricsRows(config_, state_));
+            ImGui::Spacing();
+            RenderInfoTable("Professional Architecture", aegis::BuildProfessionalArchitectureRows());
+            ImGui::Spacing();
+            RenderInfoTable("Shared Model Contracts", aegis::BuildSharedModelContractRows());
+            ImGui::Spacing();
+            RenderInfoTable("Auralith SDK", aegis::BuildSdkModuleRows());
+            ImGui::Spacing();
+            RenderInfoTable("SDK Permissions", aegis::BuildSdkPermissionRows());
+            ImGui::Spacing();
+            RenderInfoTable("Visual Strategy Builder", aegis::BuildVisualStrategyBuilderRows());
+            ImGui::Spacing();
+            RenderInfoTable("Multi-Timeframe Intelligence", aegis::BuildMultiTimeframeIntelligenceRows(state_));
+            ImGui::Spacing();
+            RenderInfoTable("Research Collections", aegis::BuildResearchCollectionRows(state_));
+            ImGui::Spacing();
+            RenderInfoTable("Correlation & Exposure Mapping", aegis::BuildCorrelationExposureRows(state_, holdings_));
+            ImGui::Spacing();
+            RenderInfoTable("Scenario Simulation", aegis::BuildScenarioSimulationRows(state_, holdings_));
+            ImGui::Spacing();
+            RenderInfoTable("Research Copilot", aegis::BuildResearchCopilotRows(state_, journal_entries_));
+            ImGui::Spacing();
+            RenderInfoTable("Long-Term Portfolio Intelligence", aegis::BuildLongTermPortfolioIntelligenceRows(state_, holdings_, journal_entries_));
+            ImGui::Spacing();
+            RenderInfoTable("Enterprise Stability", aegis::BuildEnterpriseStabilityRows(config_, state_));
+            ImGui::Spacing();
+            RenderInfoTable("Deployment Pipeline", aegis::BuildDeploymentPipelineRows());
+            ImGui::Spacing();
+            RenderInfoTable("Documentation Standards", aegis::BuildDocumentationStandardsRows());
+            ImGui::Spacing();
+            RenderInfoTable("Plugin Marketplace Foundations", aegis::BuildPluginMarketplaceRows());
+            ImGui::Spacing();
+            RenderInfoTable("Optional Cloud Sync", aegis::BuildCloudSyncPlanningRows());
+            ImGui::Spacing();
+            RenderInfoTable("Cross-Device Ecosystem", aegis::BuildCrossDeviceEcosystemRows());
+            ImGui::Spacing();
+            RenderInfoTable("Research Identity", aegis::BuildResearchIdentityRows());
+            ImGui::Spacing();
+            RenderInfoTable("Report Engine", aegis::BuildReportEngineRows(config_, state_));
+            ImGui::Spacing();
+            RenderInfoTable("PDF Renderer", aegis::BuildPdfRendererRows());
+            ImGui::Spacing();
+            RenderInfoTable("Workspace Profiles", aegis::BuildWorkspaceProfileRows());
             ImGui::Spacing();
             RenderInfoTable("Background Tasks", BuildBackgroundTaskRows());
             ImGui::Spacing();
@@ -1745,28 +2394,42 @@ namespace
             ImGui::SameLine();
             if (SmallActionButton("Open Data Folder"))
                 aegis::OpenExternalUrl(aegis::AppDataDirectory().string());
-            ImGui::EndChild();
+            }
+            auralith::ui::EndCard();
         }
 
         void RenderSettings()
         {
-            SectionTitle("Settings", "Data, account bridge, and application preferences.");
-            ImGui::BeginChild("settings_data", ImVec2(ImGui::GetContentRegionAvail().x * 0.52f, 0), true);
-            SectionTitle("Market Data");
-            ImGui::InputText("Alpha Vantage key", api_key_buffer_, sizeof(api_key_buffer_), ImGuiInputTextFlags_Password);
-            ImGui::InputTextMultiline("Watchlist", watchlist_buffer_, sizeof(watchlist_buffer_), ImVec2(0, 88.0f));
-            ImGui::SliderInt("Refresh seconds", &config_.refresh_seconds, 30, 900);
-            ImGui::SliderInt("Max symbols", &config_.max_symbols, 1, 50);
-            ImGui::SliderInt("Model count", &config_.model_count, 2, 32);
-            ImGui::InputText("SEC user agent/contact", sec_user_agent_buffer_, sizeof(sec_user_agent_buffer_));
-            ImGui::SliderInt("Quote TTL sec", &config_.alpha_quote_ttl_seconds, 15, 900);
-            ImGui::SliderInt("History cache hr", &config_.history_cache_hours, 1, 720);
-            ImGui::SliderInt("Research cache hr", &config_.research_cache_hours, 1, 720);
-            ImGui::SliderInt("Max cache MB", &config_.max_cache_mb, 25, 2048);
-            ImGui::Checkbox("Force live refresh", &config_.force_live_refresh);
-            ImGui::Checkbox("Notifications", &config_.notifications_enabled);
-            if (SmallActionButton("Save Settings"))
-            {
+            auralith::ui::SettingsTabContext ctx{
+                config_,
+                api_key_buffer_,
+                sizeof(api_key_buffer_),
+                watchlist_buffer_,
+                sizeof(watchlist_buffer_),
+                sec_user_agent_buffer_,
+                sizeof(sec_user_agent_buffer_),
+                website_base_buffer_,
+                sizeof(website_base_buffer_),
+                auth_base_buffer_,
+                sizeof(auth_base_buffer_),
+                login_user_buffer_,
+                sizeof(login_user_buffer_),
+                login_password_buffer_,
+                sizeof(login_password_buffer_),
+                remember_me_,
+                compact_mode_,
+                authenticated_,
+                validation_in_flight_,
+                validation_status_
+            };
+
+            ctx.section_title = [this](const char* title, const char* subtitle) { SectionTitle(title, subtitle); };
+            ctx.small_action_button = [this](const char* label) { return SmallActionButton(label); };
+            ctx.text_muted = [](const char* text) { TextMuted(text); };
+            ctx.render_info_table = [this](const char* title, const std::vector<aegis::InfoItem>& items) { RenderInfoTable(title, items); };
+            ctx.build_shortcut_help_rows = [this]() { return BuildShortcutHelpRows(); };
+            ctx.build_background_task_rows = [this]() { return BuildBackgroundTaskRows(); };
+            ctx.save_settings = [this]() {
                 SyncConfigFromBuffers();
                 if (aegis::SaveConfig(config_))
                 {
@@ -1775,84 +2438,41 @@ namespace
                 }
                 BeginRefresh(false);
                 Audit("settings_saved", "", "");
-            }
-            ImGui::SameLine();
-            if (SmallActionButton(validation_in_flight_ ? "Validating..." : "Validate Key"))
-                BeginValidation();
-            ImGui::TextWrapped("%s", validation_status_.c_str());
-            ImGui::Separator();
-            TextMuted("Alpha Vantage GLOBAL_QUOTE is used for direct quotes; plan freshness depends on the API key entitlement.");
-            ImGui::Spacing();
-            RenderInfoTable("Storage Plan", aegis::BuildStorageMigrationRows());
-            ImGui::Spacing();
-            RenderInfoTable("Settings Health", aegis::BuildSettingsHealthRows(config_));
-            ImGui::EndChild();
-
-            ImGui::SameLine();
-            ImGui::BeginChild("settings_auth", ImVec2(0, 0), true);
-            SectionTitle("Website Auth Bridge");
-            ImGui::InputText("Auth base URL", auth_base_buffer_, sizeof(auth_base_buffer_));
-            ImGui::InputText("Username", login_user_buffer_, sizeof(login_user_buffer_));
-            ImGui::InputText("Password", login_password_buffer_, sizeof(login_password_buffer_), ImGuiInputTextFlags_Password);
-            ImGui::Checkbox("Remember credentials", &remember_me_);
-            if (ImGui::Checkbox("Compact dashboard", &compact_mode_))
-                PersistUiPreferences("Compact dashboard preference saved.");
-            if (ImGui::Checkbox("High contrast mode", &config_.ui_high_contrast))
-                PersistUiPreferences("High contrast preference saved.");
-            if (ImGui::SliderInt("Font scale", &config_.font_scale_percent, 85, 150))
-                PersistUiPreferences("Font scale preference saved.");
-            if (SmallActionButton("Sign In"))
-                SignIn(true);
-            ImGui::SameLine();
-            if (SmallActionButton("Clear Remembered"))
-            {
+            };
+            ctx.begin_validation = [this]() { BeginValidation(); };
+            ctx.sign_in = [this]() { SignIn(true); };
+            ctx.clear_remembered = [this]() {
                 aegis::DeleteRememberedCredentials();
                 SetBuffer(login_password_buffer_, sizeof(login_password_buffer_), "");
                 status_ = "Remembered credentials cleared.";
-            }
-            ImGui::SameLine();
-            if (SmallActionButton("Clear All Secrets"))
-            {
+            };
+            ctx.clear_all_secrets = [this]() {
                 const aegis::SecretClearResult result = aegis::ClearStoredSecrets(config_);
                 config_ = result.config;
                 SetBuffer(api_key_buffer_, sizeof(api_key_buffer_), "");
                 SetBuffer(login_password_buffer_, sizeof(login_password_buffer_), "");
                 status_ = result.status;
                 Audit("clear_all_secrets", "", "");
-            }
-            ImGui::Spacing();
-            ImGui::TextWrapped("%s", authenticated_ ? "Website bridge connected for this session." : "Desktop market research works locally even when the website bridge is not signed in.");
-            ImGui::Separator();
-            SectionTitle("Diagnostics");
-            ImGui::TextWrapped("Structured logs: %s", (aegis::AppDataDirectory() / "diagnostics.jsonl").string().c_str());
-            if (SmallActionButton("Open Diagnostics Folder"))
-                aegis::OpenExternalUrl(aegis::AppDataDirectory().string());
-            ImGui::SameLine();
-            if (SmallActionButton("Run Self-Test"))
-            {
+            };
+            ctx.persist_ui_preferences = [this](const std::string& message) { PersistUiPreferences(message); };
+            ctx.open_diagnostics_folder = []() { aegis::OpenExternalUrl(aegis::AppDataDirectory().string()); };
+            ctx.run_self_test = [this]() {
                 const int code = aegis::RunSelfTests();
                 status_ = code == 0 ? "Self-test passed." : "Self-test failed. See self-test-report.txt.";
-            }
-            ImGui::Spacing();
-            RenderInfoTable("Production Readiness", aegis::BuildProductionReadinessRows(config_));
-            ImGui::Spacing();
-            RenderInfoTable("Keyboard And Commands", BuildShortcutHelpRows());
-            ImGui::Spacing();
-            RenderInfoTable("Background Tasks", BuildBackgroundTaskRows());
-            ImGui::Spacing();
-            const std::vector<std::string> recent = aegis::LoadRecentDiagnosticLines(4);
-            if (!recent.empty())
-            {
-                SectionTitle("Recent Diagnostics");
-                for (const std::string& line : recent)
-                    ImGui::TextWrapped("%s", line.c_str());
-            }
-            ImGui::EndChild();
+            };
+
+            auralith::ui::RenderSettingsTab(ctx);
         }
 
         void RenderQuoteTable(const char* id, const std::vector<const aegis::StockQuote*>& quotes, int max_rows)
         {
-            if (ImGui::BeginTable(id, 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 0)))
+            if (quotes.empty())
+            {
+                auralith::ui::EmptyState({ "W", "No watchlist data yet.", "Add symbols or refresh providers to begin market tracking.", "Add symbol" });
+                return;
+            }
+
+            if (auralith::ui::BeginDataTable(id, 8, ImVec2(0, 0), ImGuiTableFlags_SizingStretchProp))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 86.0f);
                 ImGui::TableSetupColumn("Company", ImGuiTableColumnFlags_WidthStretch);
@@ -1898,9 +2518,9 @@ namespace
                         ImGui::TextUnformatted("--");
                     }
                     ImGui::TableNextColumn();
-                    ImGui::TextUnformatted(quote->source.c_str());
+                    auralith::ui::StatusPill({ quote->source.empty() ? "Unknown" : quote->source, quote->fallback ? auralith::ui::Tone::Warning : auralith::ui::Tone::Muted, "Provider/source label for this quote.", "P" });
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -1929,14 +2549,38 @@ namespace
             ImGui::SameLine();
             TextMuted(quote->latest_trading_day.c_str());
 
+            ImGui::Spacing();
+            if (auralith::ui::BeginDataTable("selected_symbol_source", 3, ImVec2(0, 84.0f), ImGuiTableFlags_NoHostExtendY))
+            {
+                ImGui::TableSetupColumn("Provider/Source");
+                ImGui::TableSetupColumn("Last Updated");
+                ImGui::TableSetupColumn("Freshness");
+                ImGui::TableHeadersRow();
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+            auralith::ui::StatusPill({ quote->source.empty() ? state_.source_badge : quote->source, quote->fallback ? auralith::ui::Tone::Warning : auralith::ui::Tone::Info, "Provider/source label.", "P" });
+                ImGui::TableNextColumn();
+                const std::string updated = !quote->timestamp.empty() ? quote->timestamp : (!quote->latest_trading_day.empty() ? quote->latest_trading_day : state_.last_refresh_label);
+                ImGui::TextUnformatted(updated.empty() ? "--" : updated.c_str());
+                ImGui::TableNextColumn();
+                auralith::ui::StatusPill({ aegis::DataQualityBadge(*quote), quote->fallback ? auralith::ui::Tone::Warning : auralith::ui::Tone::Info, "Freshness and fallback status.", "F" });
+                auralith::ui::EndDataTable();
+            }
+
             PlotHistory(quote->history, ImVec2(0, 126.0f));
             ImGui::Spacing();
             SectionTitle(signal->rating.c_str(), signal->posture.c_str());
             DrawScorePill(signal->score, ImVec2(ImGui::GetContentRegionAvail().x, 12.0f));
             ImGui::TextWrapped("%s", signal->thesis.c_str());
             ImGui::Spacing();
+            DrawLabeledValue("Paper setup", signal->entry_idea, signal->setup_type);
+            DrawLabeledValue("Invalidation", signal->invalidation, signal->manual_confirmation_required ? "Manual confirmation required" : "Review settings");
+            DrawLabeledValue("Expected sell zone", signal->expected_sell_zone, signal->exit_plan);
+            DrawLabeledValue("Trailing stop", aegis::FormatCurrency(signal->trailing_stop_level), "2x ATR below highest close");
+            DrawLabeledValue("Risk/reward", aegis::FormatCurrency(signal->entry_price) + " -> " + aegis::FormatCurrency(signal->target1_price), signal->risk);
+            ImGui::Spacing();
 
-            if (ImGui::BeginTable("selected_metrics", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (auralith::ui::BeginDataTable("selected_metrics", 4, ImVec2(0, 84.0f), ImGuiTableFlags_NoHostExtendY))
             {
                 ImGui::TableSetupColumn("Open");
                 ImGui::TableSetupColumn("Range");
@@ -1955,9 +2599,13 @@ namespace
                 if (quote->market_cap_estimated)
                     market_cap += " est.";
                 ImGui::TextUnformatted(market_cap.c_str());
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
 
+            ImGui::Spacing();
+            const std::vector<aegis::Candle> selected_candles = aegis::BuildSyntheticCandles(*quote, 90);
+            const aegis::IndicatorSnapshot selected_indicators = aegis::BuildIndicators(selected_candles, FindExactQuote("SPY"), FindExactQuote("QQQ"));
+            RenderInfoTable("Auralith Narrative", aegis::BuildResearchNarrativeRows(*quote, *signal, selected_indicators));
             ImGui::Spacing();
             RenderInfoTable("Signal Factors", signal->factors);
             ImGui::Spacing();
@@ -1967,7 +2615,13 @@ namespace
         void RenderInfoTable(const char* title, const std::vector<aegis::InfoItem>& items)
         {
             SectionTitle(title);
-            if (ImGui::BeginTable(title, 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
+            if (items.empty())
+            {
+                auralith::ui::EmptyState({ "I", std::string("No ") + title + " rows.", "Auralith will populate this panel when the underlying workflow has data.", "" });
+                return;
+            }
+
+            if (auralith::ui::BeginDataTable(title, 4, ImVec2(0, 0), ImGuiTableFlags_NoHostExtendY))
             {
                 ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 140.0f);
                 ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 110.0f);
@@ -1986,26 +2640,35 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", item.detail.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
         std::vector<aegis::InfoItem> BuildBackgroundTaskRows() const
         {
-            const auto row = [](const std::string& name, bool active, int request_id, const std::string& symbol, const std::string& status) {
-                aegis::InfoItem item;
-                item.name = name;
-                item.state = active ? "Running" : "Idle";
-                item.value = "#" + std::to_string(std::max(0, request_id));
-                item.detail = symbol.empty() ? status : symbol + ": " + status;
-                return item;
+            aegis::BackgroundTaskManager manager;
+            const auto upsert = [&](const std::string& name, bool active, int request_id, const std::string& symbol, const std::string& status, const std::string& last_run, const std::string& last_error) {
+                aegis::BackgroundTaskSnapshot task;
+                task.name = name;
+                task.status = active ? "Running" : "Idle";
+                task.progress = "#" + std::to_string(std::max(0, request_id));
+                task.last_run = last_run;
+                task.last_error = last_error;
+                task.detail = symbol.empty() ? status : symbol + ": " + status;
+                task.can_cancel = active;
+                task.can_retry = !active && !last_error.empty();
+                manager.Upsert(task);
             };
-            return {
-                row("Quote refresh", refresh_in_flight_, refresh_request_id_, "", status_),
-                row("API validation", validation_in_flight_, validation_request_id_, "", validation_status_),
-                row("History load", history_in_flight_, history_request_id_, history_request_symbol_, history_status_),
-                row("Research load", research_in_flight_, research_request_id_, research_request_symbol_, research_status_)
-            };
+
+            upsert("Quote refresh", refresh_in_flight_, refresh_request_id_, "", status_, state_.last_refresh_label, "");
+            upsert("API validation", validation_in_flight_, validation_request_id_, "", validation_status_, validation_status_.empty() ? "" : aegis::NowTimeLabel(), validation_status_.find("failed") != std::string::npos ? validation_status_ : "");
+            upsert("History load", history_in_flight_, history_request_id_, history_request_symbol_, history_status_, history_result_.fetched_at, history_result_.fallback_reason);
+            upsert("Research load", research_in_flight_, research_request_id_, research_request_symbol_, research_status_, research_result_.fetched_at, research_result_.fallback_reason);
+            upsert("Provider health checks", validation_in_flight_, validation_request_id_, "", validation_status_.empty() ? "Provider health is available from API Health Check." : validation_status_, validation_status_.empty() ? "" : aegis::NowTimeLabel(), "");
+            upsert("Cache cleanup", false, 0, "", maintenance_status_.empty() ? "Prune cache and backup validation are idle." : maintenance_status_, "", "");
+            upsert("SQLite migration", false, 0, "", "Planned compatibility migration. Legacy TSV/JSONL files remain untouched until backup/import is implemented.", "", "");
+            upsert("Web bridge health", false, 0, "", config_.website_base_url, "", "");
+            return manager.Rows();
         }
 
         DataStatusSummary BuildDataStatusSummary() const
@@ -2044,7 +2707,7 @@ namespace
                 summary.label = "Rate-limited";
                 summary.state = "Provider limit";
                 summary.color = V4(0.78f, 0.46f, 0.10f, 1.0f);
-                summary.detail = "A provider limit was detected. Aegis is using cache, fallback, or partial data where available.";
+                summary.detail = "A provider limit was detected. Auralith is using cache, fallback, or partial data where available.";
             }
             else if (has_network_issue)
             {
@@ -2078,7 +2741,7 @@ namespace
             {
                 summary.label = "Live";
                 summary.state = "Provider-backed";
-                summary.color = V4(0.08f, 0.48f, 0.24f, 1.0f);
+                summary.color = V4(0.12f, 0.38f, 0.72f, 1.0f);
                 summary.detail = state_.source_label.empty() ? "Live provider quote refresh is active." : state_.source_label;
             }
             else
@@ -2130,7 +2793,7 @@ namespace
         void RenderEtfExposure(const std::string& symbol)
         {
             SectionTitle("ETF Exposure");
-            if (ImGui::BeginTable("etf_exposure", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (auralith::ui::BeginDataTable("etf_exposure", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("ETF", ImGuiTableColumnFlags_WidthFixed, 72.0f);
                 ImGui::TableSetupColumn("Weight", ImGuiTableColumnFlags_WidthFixed, 86.0f);
@@ -2146,7 +2809,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", row.note.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -2157,7 +2820,7 @@ namespace
 
             if (ImGui::BeginTabItem("SEC"))
             {
-                if (ImGui::BeginTable("filings_table", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
+                if (auralith::ui::BeginDataTable("filings_table", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
                 {
                     ImGui::TableSetupColumn("Form", ImGuiTableColumnFlags_WidthFixed, 56.0f);
                     ImGui::TableSetupColumn("Date", ImGuiTableColumnFlags_WidthFixed, 92.0f);
@@ -2182,14 +2845,14 @@ namespace
                             aegis::OpenExternalUrl(filing.url);
                         ImGui::PopID();
                     }
-                    ImGui::EndTable();
+                    auralith::ui::EndDataTable();
                 }
                 ImGui::EndTabItem();
             }
 
             if (ImGui::BeginTabItem("News"))
             {
-                if (ImGui::BeginTable("news_table", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
+                if (auralith::ui::BeginDataTable("news_table", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
                 {
                     ImGui::TableSetupColumn("Date", ImGuiTableColumnFlags_WidthFixed, 92.0f);
                     ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 90.0f);
@@ -2214,14 +2877,14 @@ namespace
                             aegis::OpenExternalUrl(item.url);
                         ImGui::PopID();
                     }
-                    ImGui::EndTable();
+                    auralith::ui::EndDataTable();
                 }
                 ImGui::EndTabItem();
             }
 
             if (ImGui::BeginTabItem("Earnings"))
             {
-                if (ImGui::BeginTable("earnings_table", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+                if (auralith::ui::BeginDataTable("earnings_table", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
                 {
                     ImGui::TableSetupColumn("Date");
                     ImGui::TableSetupColumn("State");
@@ -2246,7 +2909,7 @@ namespace
                         ImGui::TableNextColumn();
                         ImGui::Text("%s / %s", aegis::FormatPercent(item.estimated_move).c_str(), aegis::FormatPercent(item.drift).c_str());
                     }
-                    ImGui::EndTable();
+                    auralith::ui::EndDataTable();
                 }
                 ImGui::EndTabItem();
             }
@@ -2265,7 +2928,7 @@ namespace
         {
             SectionTitle("Today's Focus", "Symbols with price movement, alert pressure, signal changes, earnings, or news.");
             const std::vector<aegis::FocusItem> focus = aegis::BuildFocusItems(state_, price_alerts_);
-            if (ImGui::BeginTable("today_focus", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
+            if (auralith::ui::BeginDataTable("today_focus", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 78.0f);
                 ImGui::TableSetupColumn("Priority", ImGuiTableColumnFlags_WidthFixed, 82.0f);
@@ -2285,7 +2948,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", item.detail.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -2293,7 +2956,7 @@ namespace
         {
             SectionTitle("Watchlist Groups");
             const std::vector<aegis::WatchlistGroup> groups = aegis::BuildWatchlistGroups(aegis::SplitWatchlist(config_.watchlist));
-            if (ImGui::BeginTable("watchlist_groups", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (auralith::ui::BeginDataTable("watchlist_groups", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 120.0f);
                 ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 60.0f);
@@ -2309,7 +2972,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", aegis::JoinWatchlist(group.symbols).c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -2317,7 +2980,7 @@ namespace
         {
             SectionTitle("Saved Screen Presets");
             const std::vector<aegis::ScreenPreset> presets = aegis::BuildScreenPresets();
-            if (ImGui::BeginTable("screen_presets", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (auralith::ui::BeginDataTable("screen_presets", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Preset", ImGuiTableColumnFlags_WidthFixed, 118.0f);
                 ImGui::TableSetupColumn("Filter", ImGuiTableColumnFlags_WidthFixed, 104.0f);
@@ -2339,7 +3002,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", preset.description.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -2348,7 +3011,7 @@ namespace
             SectionTitle("Alert Engine", "Persistent trigger history with acknowledge and snooze controls.");
             const int unread_alerts = aegis::CountUnreadAlertEvents(alert_events_);
             ImGui::TextWrapped("%d unread alert%s. %s", unread_alerts, unread_alerts == 1 ? "" : "s", alert_monitor_status_.c_str());
-            if (ImGui::BeginTable("alert_events", 10, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 220.0f)))
+            if (auralith::ui::BeginDataTable("alert_events", 10, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 220.0f)))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 76.0f);
                 ImGui::TableSetupColumn("Rule", ImGuiTableColumnFlags_WidthFixed, 104.0f);
@@ -2407,7 +3070,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", event.note.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
             if (alert_events_.empty())
                 TextMuted("No alert triggers recorded yet.");
@@ -2422,7 +3085,7 @@ namespace
             ImGui::SameLine();
             ImGui::TextWrapped("%d unread", unread_alerts);
 
-            if (ImGui::BeginTable("notification_center", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 165.0f)))
+            if (auralith::ui::BeginDataTable("notification_center", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 165.0f)))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 76.0f);
                 ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 88.0f);
@@ -2492,7 +3155,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted("No open alert notifications.");
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -2500,7 +3163,7 @@ namespace
         {
             SectionTitle("Heatmaps", "Watchlist movers and conviction grid.");
             const int columns = 4;
-            if (ImGui::BeginTable("conviction_heatmap", columns, ImGuiTableFlags_Borders))
+            if (auralith::ui::BeginDataTable("conviction_heatmap", columns, ImGuiTableFlags_Borders))
             {
                 int col = 0;
                 for (const aegis::StockSignal& signal : state_.signals)
@@ -2509,18 +3172,17 @@ namespace
                     ImGui::TableNextColumn();
                     const float score_t = std::clamp(static_cast<float>(signal.score) / 100.0f, 0.0f, 1.0f);
                     const float move = quote ? static_cast<float>(std::clamp((quote->change_percent + 5.0) / 10.0, 0.0, 1.0)) : 0.5f;
-                    ImGui::PushStyleColor(ImGuiCol_Button, V4(0.95f - score_t * 0.70f, 0.18f + score_t * 0.58f, 0.20f + move * 0.24f, 0.92f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, V4(0.18f, 0.38f, 0.27f, 1.0f));
+                    (void)move;
                     ImGui::PushID(signal.symbol.c_str());
-                    if (ImGui::Button((signal.symbol + "\n" + std::to_string(signal.score)).c_str(), ImVec2(-1.0f, 46.0f)))
+                    const std::string label = signal.symbol + "  " + std::to_string(signal.score);
+                    if (auralith::ui::Button(label.c_str(), score_t >= 0.72f ? auralith::ui::ButtonVariant::Primary : auralith::ui::ButtonVariant::Secondary, ImVec2(-1.0f, 46.0f)))
                         selected_symbol_ = signal.symbol;
                     ImGui::PopID();
-                    ImGui::PopStyleColor(2);
                     ++col;
                     if (col >= columns)
                         col = 0;
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -2547,7 +3209,7 @@ namespace
                     RemoveSelectedNote();
             }
 
-            if (ImGui::BeginTable("symbol_notes_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 158.0f)))
+            if (auralith::ui::BeginDataTable("symbol_notes_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 158.0f)))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 78.0f);
                 ImGui::TableSetupColumn("Updated", ImGuiTableColumnFlags_WidthFixed, 90.0f);
@@ -2568,7 +3230,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", note.note.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -2625,7 +3287,7 @@ namespace
                 aegis::FormatPercent((wins + losses) > 0 ? (static_cast<double>(wins) / static_cast<double>(wins + losses)) * 100.0 : 0.0).c_str(),
                 aegis::FormatCurrency(total_pnl).c_str());
 
-            if (ImGui::BeginTable("journal_entries_table", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX, ImVec2(0, 190.0f)))
+            if (auralith::ui::BeginDataTable("journal_entries_table", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX, ImVec2(0, 190.0f)))
             {
                 ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 90.0f);
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 76.0f);
@@ -2658,7 +3320,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", entry.mistakes.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
 
             ImGui::Spacing();
@@ -2695,7 +3357,7 @@ namespace
             const std::vector<ExposureRow> sectors = CalculateSectorExposure(totals.market_value);
             ImGui::Spacing();
             SectionTitle("Sector Caps");
-            if (ImGui::BeginTable("sector_caps", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (auralith::ui::BeginDataTable("sector_caps", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Sector");
                 ImGui::TableSetupColumn("Alloc", ImGuiTableColumnFlags_WidthFixed, 82.0f);
@@ -2714,7 +3376,7 @@ namespace
                     ImGui::TableNextColumn();
                     TextValueColored(row.percent <= 30.0 ? 1.0 : -1.0, row.percent <= 30.0 ? "Inside cap" : "Over cap");
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -2727,7 +3389,7 @@ namespace
                 TextMuted("Add holdings to see estimated cross-position correlation.");
                 return;
             }
-            if (ImGui::BeginTable("correlation_matrix", limit + 1, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollX))
+            if (auralith::ui::BeginDataTable("correlation_matrix", limit + 1, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollX))
             {
                 ImGui::TableSetupColumn("");
                 for (int i = 0; i < limit; ++i)
@@ -2747,7 +3409,7 @@ namespace
                         ImGui::Text("%.2f", corr);
                     }
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -3163,7 +3825,7 @@ namespace
                 return;
             }
 
-            if (ImGui::BeginTable("broker_import_preview", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX, ImVec2(0, 210.0f)))
+            if (auralith::ui::BeginDataTable("broker_import_preview", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX, ImVec2(0, 210.0f)))
             {
                 ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 74.0f);
                 ImGui::TableSetupColumn("Broker", ImGuiTableColumnFlags_WidthFixed, 92.0f);
@@ -3194,7 +3856,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", row.valid ? row.note.c_str() : row.error.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -3551,7 +4213,7 @@ namespace
             ExportWorkflowCsv();
             ExportJournal();
             std::ofstream file(aegis::AppDataDirectory() / "aegis-backup-manifest.txt");
-            file << "Aegis Stock Investing AI backup\n";
+            file << "Auralith Research Cockpit backup\n";
             file << "Created: " << aegis::NowTimeLabel() << '\n';
             file << "Config, encrypted credentials, TSV stores, CSV exports, diagnostics, and journal files live in this folder.\n";
             status_ = "All local data export refreshed.";
@@ -3604,6 +4266,45 @@ namespace
                 selected_tab_ = 9;
                 return;
             }
+            if (lower == "morning" || lower == "morning briefing" || lower == "daily" || lower == "daily ops")
+            {
+                selected_tab_ = 10;
+                daily_workflow_mode_ = 0;
+                return;
+            }
+            if (lower == "command" || lower == "command center" || lower == "market open")
+            {
+                selected_tab_ = 10;
+                daily_workflow_mode_ = 1;
+                return;
+            }
+            if (lower == "eod" || lower == "end of day" || lower == "end-of-day")
+            {
+                selected_tab_ = 10;
+                daily_workflow_mode_ = 2;
+                return;
+            }
+            if (lower == "weekly" || lower == "weekly review")
+            {
+                selected_tab_ = 10;
+                daily_workflow_mode_ = 3;
+                return;
+            }
+            if (lower == "strategy" || lower == "strategy lab")
+            {
+                selected_tab_ = 11;
+                return;
+            }
+            if (lower == "risk" || lower == "risk console")
+            {
+                selected_tab_ = 12;
+                return;
+            }
+            if (lower == "symbol" || lower == "symbol page")
+            {
+                selected_tab_ = 13;
+                return;
+            }
             if (lower == "alerts" || lower == "notifications" || lower == "open alerts")
             {
                 selected_tab_ = 7;
@@ -3611,7 +4312,7 @@ namespace
             }
             if (lower == "web" || lower == "open web")
             {
-                aegis::OpenExternalUrl(aegis::JoinUrl(config_.auth_base_url, config_.website_path));
+                aegis::OpenExternalUrl(aegis::JoinUrl(config_.website_base_url, config_.website_path));
                 return;
             }
             if (lower == "briefing" || lower == "export briefing")
@@ -3713,6 +4414,10 @@ namespace
                 else if (tab.find("journal") != std::string::npos) selected_tab_ = 7;
                 else if (tab.find("integration") != std::string::npos) selected_tab_ = 8;
                 else if (tab.find("settings") != std::string::npos) selected_tab_ = 9;
+                else if (tab.find("daily") != std::string::npos || tab.find("morning") != std::string::npos) selected_tab_ = 10;
+                else if (tab.find("strategy") != std::string::npos) selected_tab_ = 11;
+                else if (tab.find("risk") != std::string::npos) selected_tab_ = 12;
+                else if (tab.find("symbol") != std::string::npos) selected_tab_ = 13;
                 return;
             }
             if (lower.rfind("note ", 0) == 0)
@@ -3732,13 +4437,20 @@ namespace
             }
             if (select_symbol(command, true))
                 return;
-            status_ = "Unknown command. Try refresh, add TICKER, search TICKER, alert TICKER above PRICE, report, briefing, tab NAME, note TEXT, or plan.";
+            status_ = "Unknown command. Try Ctrl+K then refresh, morning, command center, eod, weekly, strategy lab, risk, symbol, add TICKER, alert TICKER above PRICE, report, note TEXT, or plan.";
         }
 
         void HandleKeyboardShortcuts(ImGuiIO& io)
         {
             if (io.WantTextInput || !io.KeyCtrl)
                 return;
+            if (ImGui::IsKeyPressed(ImGuiKey_K))
+            {
+                command_palette_open_ = true;
+                focus_command_palette_ = true;
+                status_ = "Command palette opened. Try morning, command center, risk, strategy lab, symbol, refresh, report, or alert AAPL above 200.";
+                return;
+            }
             if (ImGui::IsKeyPressed(ImGuiKey_R))
                 BeginRefresh(false);
             if (ImGui::IsKeyPressed(ImGuiKey_A))
@@ -3796,6 +4508,7 @@ namespace
             input.watchlist = watchlist_buffer_;
             input.alpha_vantage_api_key = api_key_buffer_;
             input.auth_base_url = auth_base_buffer_;
+            input.website_base_url = website_base_buffer_;
             input.sec_user_agent = sec_user_agent_buffer_;
             input.ui_light_theme = light_theme_;
             input.ui_compact_mode = compact_mode_;
@@ -3805,6 +4518,7 @@ namespace
             aegis::SetHttpUserAgent(aegis::SecCompliantUserAgent(config_));
             SetBuffer(watchlist_buffer_, sizeof(watchlist_buffer_), config_.watchlist);
             SetBuffer(auth_base_buffer_, sizeof(auth_base_buffer_), config_.auth_base_url);
+            SetBuffer(website_base_buffer_, sizeof(website_base_buffer_), config_.website_base_url);
             SetBuffer(sec_user_agent_buffer_, sizeof(sec_user_agent_buffer_), config_.sec_user_agent);
         }
 
@@ -4313,7 +5027,8 @@ namespace
             if (ImGui::Combo("Direction", &direction, "Above\0Below\0"))
                 alert_above_ = direction == 0;
             ImGui::SameLine();
-            ImGui::Checkbox("Enabled", &alert_enabled_);
+            if (auralith::ui::Button(alert_enabled_ ? "Enabled: ON" : "Enabled: OFF", alert_enabled_ ? auralith::ui::ButtonVariant::Secondary : auralith::ui::ButtonVariant::Ghost, ImVec2(120.0f, 32.0f)))
+                alert_enabled_ = !alert_enabled_;
             ImGui::InputTextMultiline("Note##alert", alert_note_buffer_, sizeof(alert_note_buffer_), ImVec2(0, 58.0f));
             if (SmallActionButton(selected_alert_index_ >= 0 ? "Update Alert" : "Add Alert"))
                 SaveAlertFromEditor();
@@ -4327,7 +5042,7 @@ namespace
                     RemoveSelectedAlert();
             }
 
-            if (ImGui::BeginTable("custom_alerts", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 180.0f)))
+            if (auralith::ui::BeginDataTable("custom_alerts", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 180.0f)))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 78.0f);
                 ImGui::TableSetupColumn("Rule", ImGuiTableColumnFlags_WidthFixed, 116.0f);
@@ -4360,14 +5075,14 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", alert.note.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
         void RenderHoldingsTable(const PortfolioTotals& totals)
         {
             SectionTitle("Saved Holdings", holdings_.empty() ? "Add a holding to track allocation and P/L." : "Click a row to edit it.");
-            if (ImGui::BeginTable("holdings", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 0)))
+            if (auralith::ui::BeginDataTable("holdings", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY, ImVec2(0, 0)))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 82.0f);
                 ImGui::TableSetupColumn("Shares", ImGuiTableColumnFlags_WidthFixed, 86.0f);
@@ -4412,7 +5127,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", holding.note.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
 
             ImGui::Spacing();
@@ -4426,7 +5141,7 @@ namespace
 
             ImGui::BeginChild("sector_exposure", ImVec2(ImGui::GetContentRegionAvail().x * 0.50f - 6.0f, 150.0f), true);
             SectionTitle("Sector Exposure");
-            if (ImGui::BeginTable("sector_exposure_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (auralith::ui::BeginDataTable("sector_exposure_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Sector");
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 96.0f);
@@ -4445,14 +5160,14 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::Text("%d", row.count);
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
             ImGui::EndChild();
 
             ImGui::SameLine();
             ImGui::BeginChild("position_exposure", ImVec2(0, 150.0f), true);
             SectionTitle("Concentration");
-            if (ImGui::BeginTable("position_exposure_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+            if (auralith::ui::BeginDataTable("position_exposure_table", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 86.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 96.0f);
@@ -4472,7 +5187,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextUnformatted(row.percent >= 25.0 ? "High" : row.percent >= 15.0 ? "Watch" : "OK");
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
             ImGui::EndChild();
         }
@@ -4660,7 +5375,7 @@ namespace
                     RemoveSelectedTradePlan();
             }
 
-            if (ImGui::BeginTable("trade_plans_table", 13, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX, ImVec2(0, 0)))
+            if (auralith::ui::BeginDataTable("trade_plans_table", 13, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX, ImVec2(0, 0)))
             {
                 ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 82.0f);
@@ -4718,7 +5433,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", plan.thesis.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -4777,7 +5492,7 @@ namespace
 
             ImGui::Spacing();
             SectionTitle("Eligible Signals");
-            if (ImGui::BeginTable("portfolio_signals", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
+            if (auralith::ui::BeginDataTable("portfolio_signals", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable))
             {
                 ImGui::TableSetupColumn("Symbol", ImGuiTableColumnFlags_WidthFixed, 90.0f);
                 ImGui::TableSetupColumn("Rating", ImGuiTableColumnFlags_WidthFixed, 120.0f);
@@ -4805,7 +5520,7 @@ namespace
                     ImGui::TableNextColumn();
                     ImGui::TextWrapped("%s", row.thesis.c_str());
                 }
-                ImGui::EndTable();
+                auralith::ui::EndDataTable();
             }
         }
 
@@ -4817,7 +5532,7 @@ namespace
 
         std::string SignalFilterKey() const
         {
-            static const char* keys[] = { "all", "eligible", "bullish", "risk", "hold", "wait" };
+            static const char* keys[] = { "all", "eligible", "paper", "risk", "neutral", "weak" };
             return keys[std::clamp(signal_filter_, 0, 5)];
         }
 
@@ -5225,47 +5940,7 @@ namespace
 
     void ApplyTheme()
     {
-        ImGuiStyle& style = ImGui::GetStyle();
-        ImGui::StyleColorsDark();
-        style.WindowRounding = 0.0f;
-        style.ChildRounding = 8.0f;
-        style.FrameRounding = 7.0f;
-        style.PopupRounding = 8.0f;
-        style.ScrollbarRounding = 8.0f;
-        style.ScrollbarSize = 8.0f;
-        style.GrabRounding = 8.0f;
-        style.FrameBorderSize = 1.0f;
-        style.ChildBorderSize = 1.0f;
-        style.WindowBorderSize = 0.0f;
-        style.ItemSpacing = ImVec2(10.0f, 8.0f);
-        style.FramePadding = ImVec2(11.0f, 8.0f);
-        style.WindowPadding = ImVec2(12.0f, 12.0f);
-
-        ImVec4* colors = style.Colors;
-        colors[ImGuiCol_Text] = V4(0.93f, 0.98f, 0.96f, 1.0f);
-        colors[ImGuiCol_TextDisabled] = V4(0.42f, 0.49f, 0.48f, 1.0f);
-        colors[ImGuiCol_WindowBg] = V4(0.012f, 0.020f, 0.022f, 1.0f);
-        colors[ImGuiCol_ChildBg] = V4(0.025f, 0.040f, 0.040f, 0.96f);
-        colors[ImGuiCol_PopupBg] = V4(0.025f, 0.040f, 0.040f, 0.99f);
-        colors[ImGuiCol_Border] = V4(0.75f, 0.90f, 0.86f, 0.16f);
-        colors[ImGuiCol_Separator] = V4(0.75f, 0.90f, 0.86f, 0.13f);
-        colors[ImGuiCol_FrameBg] = V4(0.038f, 0.058f, 0.058f, 0.98f);
-        colors[ImGuiCol_FrameBgHovered] = V4(0.060f, 0.120f, 0.105f, 1.0f);
-        colors[ImGuiCol_FrameBgActive] = V4(0.070f, 0.165f, 0.125f, 1.0f);
-        colors[ImGuiCol_CheckMark] = V4(0.28f, 0.86f, 0.48f, 1.0f);
-        colors[ImGuiCol_SliderGrab] = V4(0.28f, 0.86f, 0.48f, 1.0f);
-        colors[ImGuiCol_Header] = V4(0.08f, 0.20f, 0.15f, 0.78f);
-        colors[ImGuiCol_HeaderHovered] = V4(0.10f, 0.28f, 0.20f, 0.88f);
-        colors[ImGuiCol_HeaderActive] = V4(0.12f, 0.34f, 0.23f, 1.0f);
-        colors[ImGuiCol_TableHeaderBg] = V4(0.035f, 0.055f, 0.055f, 1.0f);
-        colors[ImGuiCol_TableRowBg] = V4(0.025f, 0.040f, 0.040f, 0.48f);
-        colors[ImGuiCol_TableRowBgAlt] = V4(0.040f, 0.060f, 0.060f, 0.54f);
-        colors[ImGuiCol_Button] = V4(0.050f, 0.080f, 0.075f, 0.96f);
-        colors[ImGuiCol_ButtonHovered] = V4(0.080f, 0.190f, 0.135f, 0.98f);
-        colors[ImGuiCol_ButtonActive] = V4(0.105f, 0.300f, 0.185f, 1.0f);
-        colors[ImGuiCol_PlotHistogram] = V4(0.28f, 0.86f, 0.48f, 1.0f);
-        colors[ImGuiCol_PlotLines] = V4(0.55f, 0.88f, 1.0f, 1.0f);
-        colors[ImGuiCol_TextSelectedBg] = V4(0.20f, 0.80f, 0.42f, 0.24f);
+        auralith::ui::ApplyAuralithTheme(false);
     }
 
     void ApplyLightTheme()
@@ -5292,25 +5967,25 @@ namespace
         colors[ImGuiCol_WindowBg] = V4(0.94f, 0.96f, 0.95f, 1.0f);
         colors[ImGuiCol_ChildBg] = V4(0.985f, 0.99f, 0.985f, 0.98f);
         colors[ImGuiCol_PopupBg] = V4(0.99f, 1.0f, 0.99f, 0.99f);
-        colors[ImGuiCol_Border] = V4(0.14f, 0.22f, 0.20f, 0.18f);
-        colors[ImGuiCol_Separator] = V4(0.14f, 0.22f, 0.20f, 0.16f);
-        colors[ImGuiCol_FrameBg] = V4(0.91f, 0.95f, 0.93f, 1.0f);
-        colors[ImGuiCol_FrameBgHovered] = V4(0.82f, 0.91f, 0.86f, 1.0f);
-        colors[ImGuiCol_FrameBgActive] = V4(0.73f, 0.86f, 0.79f, 1.0f);
-        colors[ImGuiCol_CheckMark] = V4(0.05f, 0.52f, 0.28f, 1.0f);
-        colors[ImGuiCol_SliderGrab] = V4(0.05f, 0.52f, 0.28f, 1.0f);
-        colors[ImGuiCol_Header] = V4(0.74f, 0.89f, 0.80f, 0.78f);
-        colors[ImGuiCol_HeaderHovered] = V4(0.66f, 0.84f, 0.74f, 0.90f);
-        colors[ImGuiCol_HeaderActive] = V4(0.56f, 0.76f, 0.65f, 1.0f);
-        colors[ImGuiCol_TableHeaderBg] = V4(0.88f, 0.93f, 0.91f, 1.0f);
-        colors[ImGuiCol_TableRowBg] = V4(0.97f, 0.99f, 0.98f, 0.62f);
-        colors[ImGuiCol_TableRowBgAlt] = V4(0.91f, 0.96f, 0.94f, 0.72f);
-        colors[ImGuiCol_Button] = V4(0.86f, 0.94f, 0.90f, 1.0f);
-        colors[ImGuiCol_ButtonHovered] = V4(0.72f, 0.88f, 0.80f, 1.0f);
-        colors[ImGuiCol_ButtonActive] = V4(0.58f, 0.78f, 0.68f, 1.0f);
+        colors[ImGuiCol_Border] = V4(0.12f, 0.17f, 0.24f, 0.20f);
+        colors[ImGuiCol_Separator] = V4(0.12f, 0.17f, 0.24f, 0.18f);
+        colors[ImGuiCol_FrameBg] = V4(0.91f, 0.94f, 0.98f, 1.0f);
+        colors[ImGuiCol_FrameBgHovered] = V4(0.82f, 0.89f, 0.98f, 1.0f);
+        colors[ImGuiCol_FrameBgActive] = V4(0.72f, 0.83f, 0.96f, 1.0f);
+        colors[ImGuiCol_CheckMark] = V4(0.05f, 0.34f, 0.72f, 1.0f);
+        colors[ImGuiCol_SliderGrab] = V4(0.05f, 0.34f, 0.72f, 1.0f);
+        colors[ImGuiCol_Header] = V4(0.73f, 0.84f, 0.98f, 0.78f);
+        colors[ImGuiCol_HeaderHovered] = V4(0.64f, 0.78f, 0.96f, 0.90f);
+        colors[ImGuiCol_HeaderActive] = V4(0.54f, 0.70f, 0.92f, 1.0f);
+        colors[ImGuiCol_TableHeaderBg] = V4(0.88f, 0.91f, 0.96f, 1.0f);
+        colors[ImGuiCol_TableRowBg] = V4(0.97f, 0.985f, 1.0f, 0.62f);
+        colors[ImGuiCol_TableRowBgAlt] = V4(0.91f, 0.94f, 0.99f, 0.72f);
+        colors[ImGuiCol_Button] = V4(0.86f, 0.91f, 0.98f, 1.0f);
+        colors[ImGuiCol_ButtonHovered] = V4(0.72f, 0.82f, 0.96f, 1.0f);
+        colors[ImGuiCol_ButtonActive] = V4(0.58f, 0.72f, 0.92f, 1.0f);
         colors[ImGuiCol_PlotHistogram] = V4(0.05f, 0.58f, 0.30f, 1.0f);
         colors[ImGuiCol_PlotLines] = V4(0.05f, 0.38f, 0.70f, 1.0f);
-        colors[ImGuiCol_TextSelectedBg] = V4(0.10f, 0.52f, 0.28f, 0.25f);
+        colors[ImGuiCol_TextSelectedBg] = V4(0.10f, 0.40f, 0.82f, 0.25f);
     }
 
     void ApplyHighContrastTheme(bool light_theme)
@@ -5384,37 +6059,44 @@ namespace
         HBITMAP old_color = static_cast<HBITMAP>(SelectObject(dc, color));
 
         RECT rect{ 0, 0, size, size };
-        HBRUSH bg = CreateSolidBrush(RGB(3, 10, 10));
+        HBRUSH bg = CreateSolidBrush(RGB(5, 8, 13));
         FillRect(dc, &rect, bg);
         DeleteObject(bg);
 
-        HPEN glow = CreatePen(PS_SOLID, std::max(1, size / 12), RGB(66, 235, 130));
-        HPEN old_pen = static_cast<HPEN>(SelectObject(dc, glow));
-        HBRUSH hollow = static_cast<HBRUSH>(GetStockObject(NULL_BRUSH));
-        HBRUSH old_brush = static_cast<HBRUSH>(SelectObject(dc, hollow));
+        HPEN blue_pen = CreatePen(PS_SOLID, std::max(1, size / 15), RGB(76, 160, 255));
+        HPEN silver_pen = CreatePen(PS_SOLID, std::max(1, size / 18), RGB(212, 226, 240));
+        HBRUSH blue_brush = CreateSolidBrush(RGB(42, 132, 232));
+        HBRUSH silver_brush = CreateSolidBrush(RGB(198, 214, 232));
+        HPEN old_pen = static_cast<HPEN>(SelectObject(dc, blue_pen));
+        HBRUSH old_brush = static_cast<HBRUSH>(SelectObject(dc, blue_brush));
 
-        POINT shield[6] = {
-            { size / 2, size / 7 },
-            { size * 6 / 7, size * 2 / 7 },
-            { size * 5 / 6, size * 2 / 3 },
-            { size / 2, size * 6 / 7 },
-            { size / 6, size * 2 / 3 },
-            { size / 7, size * 2 / 7 }
+        POINT wing[4] = {
+            { size * 3 / 16, size * 13 / 16 },
+            { size * 8 / 16, size * 3 / 16 },
+            { size * 10 / 16, size * 10 / 16 },
+            { size * 4 / 16, size * 14 / 16 }
         };
-        Polygon(dc, shield, 6);
+        Polygon(dc, wing, 4);
 
-        HFONT font = CreateFontW(-static_cast<int>(size * 0.55f), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-            OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
-        HFONT old_font = static_cast<HFONT>(SelectObject(dc, font));
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(100, 255, 160));
-        DrawTextW(dc, L"S", 1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, silver_pen);
+        SelectObject(dc, silver_brush);
+        POINT sail[3] = {
+            { size * 8 / 16, size * 3 / 16 },
+            { size * 13 / 16, size * 12 / 16 },
+            { size * 10 / 16, size * 10 / 16 }
+        };
+        Polygon(dc, sail, 3);
 
-        SelectObject(dc, old_font);
-        DeleteObject(font);
+        SelectObject(dc, blue_pen);
+        MoveToEx(dc, size / 9, size * 7 / 8, nullptr);
+        LineTo(dc, size * 14 / 16, size * 12 / 16);
+
         SelectObject(dc, old_brush);
         SelectObject(dc, old_pen);
-        DeleteObject(glow);
+        DeleteObject(blue_brush);
+        DeleteObject(silver_brush);
+        DeleteObject(blue_pen);
+        DeleteObject(silver_pen);
         SelectObject(dc, old_color);
 
         HBITMAP mask = CreateBitmap(size, size, 1, 1, nullptr);
@@ -5456,7 +6138,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     HICON app_icon_small = CreateAegisWindowIcon(16);
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L, hInstance, app_icon, LoadCursor(nullptr, IDC_ARROW), nullptr, nullptr, L"AegisStockBettingAI", app_icon_small };
     RegisterClassExW(&wc);
-    HWND hwnd = CreateWindowW(wc.lpszClassName, L"Aegis Stock Investing AI", WS_OVERLAPPEDWINDOW, 100, 100, 1560, 930, nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = CreateWindowW(wc.lpszClassName, L"Auralith Research Cockpit", WS_OVERLAPPEDWINDOW, 100, 100, 1560, 930, nullptr, nullptr, wc.hInstance, nullptr);
     if (hwnd != nullptr)
     {
         BOOL dark = TRUE;
@@ -5486,6 +6168,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+    CreateAuralithLogoTexture();
+    CreateAuralithSidebarArtTexture();
 
     const char* segoe = "C:\\Windows\\Fonts\\segoeui.ttf";
     const char* segoe_bold = "C:\\Windows\\Fonts\\segoeuib.ttf";
@@ -5504,7 +6188,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     StockApp app;
     app.Initialize();
 
-    ImVec4 clear_color = V4(0.018f, 0.032f, 0.032f, 1.0f);
+    ImVec4 clear_color = V4(0.020f, 0.026f, 0.038f, 1.0f);
     bool done = false;
     while (!done)
     {
@@ -5554,6 +6238,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int)
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
+    CleanupAuralithSidebarArtTexture();
+    CleanupAuralithLogoTexture();
     CleanupDeviceD3D();
     DestroyWindow(hwnd);
     UnregisterClassW(wc.lpszClassName, wc.hInstance);
@@ -5599,10 +6285,170 @@ bool CreateDeviceD3D(HWND hWnd)
 
 void CleanupDeviceD3D()
 {
+    CleanupAuralithSidebarArtTexture();
+    CleanupAuralithLogoTexture();
     CleanupRenderTarget();
     if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = nullptr; }
     if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = nullptr; }
     if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = nullptr; }
+}
+
+bool CreateTextureFromPngBytes(const unsigned char* bytes, std::size_t byte_count, ID3D11ShaderResourceView** out_texture, int* out_width, int* out_height)
+{
+    if (g_pd3dDevice == nullptr || bytes == nullptr || byte_count == 0 || out_texture == nullptr)
+        return false;
+
+    if (*out_texture != nullptr)
+    {
+        (*out_texture)->Release();
+        *out_texture = nullptr;
+    }
+    if (out_width != nullptr)
+        *out_width = 0;
+    if (out_height != nullptr)
+        *out_height = 0;
+
+    const HRESULT co_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool should_uninitialize = SUCCEEDED(co_result);
+    if (FAILED(co_result) && co_result != RPC_E_CHANGED_MODE)
+        return false;
+
+    IWICImagingFactory* factory = nullptr;
+    IWICStream* stream = nullptr;
+    IWICBitmapDecoder* decoder = nullptr;
+    IWICBitmapFrameDecode* frame = nullptr;
+    IWICFormatConverter* converter = nullptr;
+    ID3D11Texture2D* texture = nullptr;
+
+    auto release_all = [&]() {
+        if (texture) { texture->Release(); texture = nullptr; }
+        if (converter) { converter->Release(); converter = nullptr; }
+        if (frame) { frame->Release(); frame = nullptr; }
+        if (decoder) { decoder->Release(); decoder = nullptr; }
+        if (stream) { stream->Release(); stream = nullptr; }
+        if (factory) { factory->Release(); factory = nullptr; }
+        if (should_uninitialize)
+            CoUninitialize();
+    };
+
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+    if (FAILED(hr))
+    {
+        release_all();
+        return false;
+    }
+
+    hr = factory->CreateStream(&stream);
+    if (SUCCEEDED(hr))
+    {
+        hr = stream->InitializeFromMemory(
+            const_cast<BYTE*>(reinterpret_cast<const BYTE*>(bytes)),
+            static_cast<DWORD>(byte_count));
+    }
+    if (SUCCEEDED(hr))
+        hr = factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnLoad, &decoder);
+    if (SUCCEEDED(hr))
+        hr = decoder->GetFrame(0, &frame);
+
+    UINT width = 0;
+    UINT height = 0;
+    if (SUCCEEDED(hr))
+        hr = frame->GetSize(&width, &height);
+    if (SUCCEEDED(hr))
+        hr = factory->CreateFormatConverter(&converter);
+    if (SUCCEEDED(hr))
+    {
+        hr = converter->Initialize(
+            frame,
+            GUID_WICPixelFormat32bppRGBA,
+            WICBitmapDitherTypeNone,
+            nullptr,
+            0.0,
+            WICBitmapPaletteTypeCustom);
+    }
+
+    std::vector<unsigned char> pixels;
+    const UINT stride = width * 4;
+    if (SUCCEEDED(hr) && width > 0 && height > 0)
+    {
+        pixels.resize(static_cast<size_t>(stride) * static_cast<size_t>(height));
+        hr = converter->CopyPixels(nullptr, stride, static_cast<UINT>(pixels.size()), pixels.data());
+    }
+
+    if (SUCCEEDED(hr))
+    {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA subresource{};
+        subresource.pSysMem = pixels.data();
+        subresource.SysMemPitch = stride;
+        hr = g_pd3dDevice->CreateTexture2D(&desc, &subresource, &texture);
+    }
+    if (SUCCEEDED(hr))
+        hr = g_pd3dDevice->CreateShaderResourceView(texture, nullptr, out_texture);
+
+    if (SUCCEEDED(hr))
+    {
+        if (out_width != nullptr)
+            *out_width = static_cast<int>(width);
+        if (out_height != nullptr)
+            *out_height = static_cast<int>(height);
+    }
+
+    release_all();
+    return SUCCEEDED(hr) && *out_texture != nullptr;
+}
+
+bool CreateAuralithLogoTexture()
+{
+    CleanupAuralithLogoTexture();
+    return CreateTextureFromPngBytes(
+        auralith::ui::kAuralithLogoPng,
+        auralith::ui::kAuralithLogoPngSize,
+        &g_auralithLogoTexture,
+        &g_auralithLogoWidth,
+        &g_auralithLogoHeight);
+}
+
+void CleanupAuralithLogoTexture()
+{
+    if (g_auralithLogoTexture)
+    {
+        g_auralithLogoTexture->Release();
+        g_auralithLogoTexture = nullptr;
+    }
+    g_auralithLogoWidth = 0;
+    g_auralithLogoHeight = 0;
+}
+
+bool CreateAuralithSidebarArtTexture()
+{
+    CleanupAuralithSidebarArtTexture();
+    return CreateTextureFromPngBytes(
+        auralith::ui::kAuralithSidebarArtPng,
+        auralith::ui::kAuralithSidebarArtPngSize,
+        &g_auralithSidebarArtTexture,
+        &g_auralithSidebarArtWidth,
+        &g_auralithSidebarArtHeight);
+}
+
+void CleanupAuralithSidebarArtTexture()
+{
+    if (g_auralithSidebarArtTexture)
+    {
+        g_auralithSidebarArtTexture->Release();
+        g_auralithSidebarArtTexture = nullptr;
+    }
+    g_auralithSidebarArtWidth = 0;
+    g_auralithSidebarArtHeight = 0;
 }
 
 void CreateRenderTarget()

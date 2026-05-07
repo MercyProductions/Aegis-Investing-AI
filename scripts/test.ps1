@@ -8,9 +8,24 @@ if (-not (Test-Path $exe)) {
     throw "Release executable not found: $exe"
 }
 
+$coreExe = Join-Path $root "x64\Release\AuralithCore.exe"
+if (-not (Test-Path $coreExe)) {
+    throw "Core executable not found: $coreExe"
+}
+
 & $exe --self-test
 if ($LASTEXITCODE -ne 0) {
     throw "Self-test failed with exit code $LASTEXITCODE."
+}
+
+& $coreExe --self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "Core self-test failed with exit code $LASTEXITCODE."
+}
+
+& $coreExe --health | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "Core health check failed with exit code $LASTEXITCODE."
 }
 
 $p = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden

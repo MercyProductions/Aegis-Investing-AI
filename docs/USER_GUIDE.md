@@ -1,4 +1,4 @@
-# Aegis Stock Betting AI User Guide
+# Auralith User Guide
 
 ## Dashboard
 
@@ -55,6 +55,8 @@ App data is stored under:
 ```text
 %LOCALAPPDATA%\Aegis\Stock Betting AI
 ```
+
+This legacy folder name is preserved during the first Auralith pass so existing data remains visible. The SQLite migration plan documents the future backup/import path.
 
 Important files include `diagnostics.jsonl`, `audit-log.jsonl`, `portfolio-holdings.tsv`, `price-alerts.tsv`, `alert-events.tsv`, `trade-plans.tsv`, `symbol-notes.tsv`, `trade-journal-upgraded.tsv`, and optional broker import CSV files.
 

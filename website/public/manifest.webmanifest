@@ -1,0 +1,51 @@
+{
+  "name": "Auralith Markets",
+  "short_name": "Auralith",
+  "description": "Auralith web cockpit for research-first market intelligence, portfolio review, reports, and paper execution monitoring.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "browser"],
+  "orientation": "any",
+  "background_color": "#101417",
+  "theme_color": "#101417",
+  "id": "auralith-markets",
+  "categories": ["finance", "productivity", "business"],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "description": "Open the Auralith daily intelligence dashboard.",
+      "url": "/#/dashboard",
+      "icons": [{ "src": "/auralith-icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Reports",
+      "short_name": "Reports",
+      "description": "Open the Auralith reports hub.",
+      "url": "/#/reports",
+      "icons": [{ "src": "/auralith-icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Alerts",
+      "short_name": "Alerts",
+      "description": "Review market, provider, risk, and paper execution notifications.",
+      "url": "/#/alerts",
+      "icons": [{ "src": "/auralith-icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
+  "icons": [
+    {
+      "src": "/auralith-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/auralith-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

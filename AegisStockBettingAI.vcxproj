@@ -58,13 +58,13 @@
       <PreprocessorDefinitions>WIN32;_WINDOWS;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>imgui;imgui\backends;src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>imgui;imgui\backends;src;$(WindowsSdkDir)Include\$(WindowsTargetPlatformVersion)\um\winsqlite;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;winhttp.lib;crypt32.lib;shell32.lib;dwmapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;winhttp.lib;crypt32.lib;shell32.lib;dwmapi.lib;winsqlite3.lib;windowscodecs.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>copy /Y "$(ProjectDir)AegisStockBettingAI.config.ini" "$(OutDir)AegisStockBettingAI.config.ini"</Command>
@@ -79,7 +79,7 @@
       <PreprocessorDefinitions>WIN32;_WINDOWS;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>imgui;imgui\backends;src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>imgui;imgui\backends;src;$(WindowsSdkDir)Include\$(WindowsTargetPlatformVersion)\um\winsqlite;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
@@ -87,7 +87,7 @@
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;winhttp.lib;crypt32.lib;shell32.lib;dwmapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;winhttp.lib;crypt32.lib;shell32.lib;dwmapi.lib;winsqlite3.lib;windowscodecs.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>copy /Y "$(ProjectDir)AegisStockBettingAI.config.ini" "$(OutDir)AegisStockBettingAI.config.ini"</Command>
@@ -105,13 +105,67 @@
     <ClCompile Include="src\AppSession.cpp" />
     <ClCompile Include="src\AppStorage.cpp" />
     <ClCompile Include="src\BrokerImport.cpp" />
+    <ClCompile Include="src\core\CoreIntelligence.cpp" />
     <ClCompile Include="src\ReportExport.cpp" />
     <ClCompile Include="src\StockData.cpp" />
     <ClCompile Include="src\AdvancedAnalytics.cpp" />
     <ClCompile Include="src\ProviderLayer.cpp" />
     <ClCompile Include="src\SelfTests.cpp" />
     <ClCompile Include="src\SettingsService.cpp" />
+    <ClCompile Include="src\ai\MarketNarrative.cpp" />
+    <ClCompile Include="src\ai\PortfolioReviewer.cpp" />
+    <ClCompile Include="src\ai\ResearchSummarizer.cpp" />
+    <ClCompile Include="src\ai\RiskNarrative.cpp" />
+    <ClCompile Include="src\ai\WatchlistAnalyst.cpp" />
+    <ClCompile Include="src\ai\memory\PortfolioMemory.cpp" />
+    <ClCompile Include="src\ai\memory\ResearchMemory.cpp" />
+    <ClCompile Include="src\ai\memory\SessionMemory.cpp" />
+    <ClCompile Include="src\ai\memory\SymbolMemory.cpp" />
+    <ClCompile Include="src\audit\AuditManager.cpp" />
+    <ClCompile Include="src\audit\ComplianceGuards.cpp" />
+    <ClCompile Include="src\audit\EventRecorder.cpp" />
+    <ClCompile Include="src\engine\AnalyticsEngine.cpp" />
+    <ClCompile Include="src\engine\MarketEngine.cpp" />
+    <ClCompile Include="src\engine\PortfolioEngine.cpp" />
+    <ClCompile Include="src\engine\RegimeEngine.cpp" />
+    <ClCompile Include="src\engine\RiskEngine.cpp" />
+    <ClCompile Include="src\engine\SignalEngine.cpp" />
+    <ClCompile Include="src\history\CandleRepository.cpp" />
+    <ClCompile Include="src\history\DataRetention.cpp" />
+    <ClCompile Include="src\history\HistoricalStore.cpp" />
+    <ClCompile Include="src\history\HistoricalSync.cpp" />
+    <ClCompile Include="src\intelligence\ResearchTimeline.cpp" />
+    <ClCompile Include="src\metrics\InternalMetrics.cpp" />
+    <ClCompile Include="src\paper\CommissionModel.cpp" />
+    <ClCompile Include="src\paper\ExecutionAudit.cpp" />
+    <ClCompile Include="src\paper\FillEngine.cpp" />
+    <ClCompile Include="src\paper\PaperBroker.cpp" />
+    <ClCompile Include="src\paper\SlippageModel.cpp" />
+    <ClCompile Include="src\professional\ProfessionalPlatform.cpp" />
+    <ClCompile Include="src\providers\AlphaVantageProvider.cpp" />
+    <ClCompile Include="src\providers\CachedProvider.cpp" />
+    <ClCompile Include="src\providers\DemoProvider.cpp" />
+    <ClCompile Include="src\providers\FinnhubProvider.cpp" />
+    <ClCompile Include="src\providers\PolygonProvider.cpp" />
+    <ClCompile Include="src\persistence\CoreDatabase.cpp" />
+    <ClCompile Include="src\reports\HtmlRenderer.cpp" />
+    <ClCompile Include="src\reports\PdfRenderer.cpp" />
+    <ClCompile Include="src\reports\ReportComposer.cpp" />
+    <ClCompile Include="src\reports\ResearchTemplates.cpp" />
+    <ClCompile Include="src\resilience\Resilience.cpp" />
+    <ClCompile Include="src\sdk\AuralithSDK.cpp" />
+    <ClCompile Include="src\services\BackgroundTaskManager.cpp" />
+    <ClCompile Include="src\services\SafetyGate.cpp" />
+    <ClCompile Include="src\shared\SharedModels.cpp" />
     <ClCompile Include="src\SymbolRules.cpp" />
+    <ClCompile Include="src\ui\AuralithEmbeddedLogo.cpp" />
+    <ClCompile Include="src\ui\AuralithLayout.cpp" />
+    <ClCompile Include="src\ui\AuralithSidebarArt.cpp" />
+    <ClCompile Include="src\ui\AuralithTheme.cpp" />
+    <ClCompile Include="src\ui\AuralithWidgets.cpp" />
+    <ClCompile Include="src\ui\SettingsTab.cpp" />
+    <ClCompile Include="src\workflows\DailyIntelligence.cpp" />
+    <ClCompile Include="src\workspaces\WorkspaceProfiles.cpp" />
     <ClCompile Include="src\Main.cpp" />
     <ClCompile Include="imgui\imgui.cpp" />
     <ClCompile Include="imgui\imgui_draw.cpp" />
@@ -132,23 +186,79 @@
     <ClInclude Include="src\AppSession.h" />
     <ClInclude Include="src\AppStorage.h" />
     <ClInclude Include="src\BrokerImport.h" />
+    <ClInclude Include="src\core\CoreIntelligence.h" />
     <ClInclude Include="src\ReportExport.h" />
     <ClInclude Include="src\StockData.h" />
     <ClInclude Include="src\AdvancedAnalytics.h" />
     <ClInclude Include="src\ProviderLayer.h" />
     <ClInclude Include="src\SelfTests.h" />
     <ClInclude Include="src\SettingsService.h" />
+    <ClInclude Include="src\ai\ResearchNarrative.h" />
+    <ClInclude Include="src\ai\memory\IntelligenceMemory.h" />
+    <ClInclude Include="src\audit\AuditManager.h" />
+    <ClInclude Include="src\engine\AnalyticsEngine.h" />
+    <ClInclude Include="src\engine\AssetTypes.h" />
+    <ClInclude Include="src\engine\MarketEngine.h" />
+    <ClInclude Include="src\engine\PortfolioEngine.h" />
+    <ClInclude Include="src\engine\RegimeEngine.h" />
+    <ClInclude Include="src\engine\RiskEngine.h" />
+    <ClInclude Include="src\engine\SignalEngine.h" />
+    <ClInclude Include="src\history\HistoricalStore.h" />
+    <ClInclude Include="src\intelligence\ResearchTimeline.h" />
+    <ClInclude Include="src\metrics\InternalMetrics.h" />
+    <ClInclude Include="src\paper\PaperBroker.h" />
+    <ClInclude Include="src\persistence\CoreDatabase.h" />
+    <ClInclude Include="src\professional\ProfessionalPlatform.h" />
+    <ClInclude Include="src\providers\IMarketProvider.h" />
+    <ClInclude Include="src\reports\ReportComposer.h" />
+    <ClInclude Include="src\resilience\Resilience.h" />
+    <ClInclude Include="src\sdk\AuralithSDK.h" />
+    <ClInclude Include="src\services\BackgroundTaskManager.h" />
+    <ClInclude Include="src\services\SafetyGate.h" />
+    <ClInclude Include="src\shared\SharedModels.h" />
     <ClInclude Include="src\SymbolRules.h" />
+    <ClInclude Include="src\ui\AuralithEmbeddedLogo.h" />
+    <ClInclude Include="src\ui\AuralithLayout.h" />
+    <ClInclude Include="src\ui\AuralithSidebarArt.h" />
+    <ClInclude Include="src\ui\AuralithTheme.h" />
+    <ClInclude Include="src\ui\AuralithWidgets.h" />
+    <ClInclude Include="src\ui\SettingsTab.h" />
+    <ClInclude Include="src\ui\theme\Animations.h" />
+    <ClInclude Include="src\ui\theme\Colors.h" />
+    <ClInclude Include="src\ui\theme\Icons.h" />
+    <ClInclude Include="src\ui\theme\Spacing.h" />
+    <ClInclude Include="src\ui\theme\Typography.h" />
+    <ClInclude Include="src\ui\theme\Widgets.h" />
+    <ClInclude Include="src\workflows\DailyIntelligence.h" />
+    <ClInclude Include="src\workspaces\WorkspaceProfiles.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="src\Auralith.rc" />
+    <Image Include="assets\auralith.ico" />
+    <Image Include="assets\logo.png" />
   </ItemGroup>
   <ItemGroup>
     <None Include="AegisStockBettingAI.config.ini" />
+    <None Include="RELEASE_NOTES.md" />
+    <None Include="docs\APP_IDENTITY_AND_INSTALLER_PLAN.md" />
+    <None Include="docs\AURALITH_MIGRATION_PLAN.md" />
+    <None Include="docs\CORE_EXTRACTION_PLAN.md" />
+    <None Include="docs\DAILY_INTELLIGENCE_SYSTEM.md" />
+    <None Include="docs\INTELLIGENCE_NETWORK.md" />
+    <None Include="docs\PROFESSIONAL_PLATFORM.md" />
+    <None Include="Installer\README.md" />
     <None Include="README.md" />
     <None Include="docs\PRODUCTION_HARDENING.md" />
     <None Include="docs\USER_GUIDE.md" />
+    <None Include="docs\WEB_PARITY_THROUGH_CORE.md" />
     <None Include="docs\sqlite-schema-v1.sql" />
     <None Include="scripts\build.ps1" />
     <None Include="scripts\test.ps1" />
     <None Include="scripts\release.ps1" />
+    <None Include="plugins\README.md" />
+    <None Include="plugins\plugin.schema.json" />
+    <None Include="SDK\README.md" />
+    <None Include="Shared\Models\auralith-contracts.schema.json" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

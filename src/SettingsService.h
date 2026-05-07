@@ -12,6 +12,7 @@ namespace aegis
         std::string watchlist;
         std::string alpha_vantage_api_key;
         std::string auth_base_url;
+        std::string website_base_url;
         std::string sec_user_agent;
         bool ui_light_theme = false;
         bool ui_compact_mode = false;

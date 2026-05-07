@@ -21,11 +21,11 @@ Copy-Item (Join-Path $root "docs") (Join-Path $dist "docs") -Recurse -Force
 
 $manifest = Join-Path $dist "release-manifest.txt"
 @(
-    "Aegis Stock Betting AI",
+    "Auralith",
     "Version: $Version",
     "Built: $(Get-Date -Format s)",
     "Configuration: Release x64",
-    "Research only. Paper mode default. No live trading module included."
+    "Research only. Paper mode default. No live execution module included."
 ) | Set-Content -Path $manifest -Encoding UTF8
 
 Write-Host "Release artifact created: $dist"

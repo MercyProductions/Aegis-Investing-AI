@@ -39,7 +39,7 @@ namespace aegis
 
         std::string& UserAgentStorage()
         {
-            static std::string user_agent = "AegisStockInvestingAI/1.0 (research-only desktop app; contact: gabriel@local.invalid)";
+            static std::string user_agent = "Auralith/1.0 (research-only market cockpit; contact: gabriel@local.invalid)";
             return user_agent;
         }
 
@@ -48,7 +48,7 @@ namespace aegis
             value.erase(std::remove(value.begin(), value.end(), '\r'), value.end());
             value.erase(std::remove(value.begin(), value.end(), '\n'), value.end());
             value = Trim(value);
-            return value.empty() ? "AegisStockInvestingAI/1.0 (research-only desktop app; contact: gabriel@local.invalid)" : value;
+            return value.empty() ? "Auralith/1.0 (research-only market cockpit; contact: gabriel@local.invalid)" : value;
         }
 
         std::string CurrentHttpUserAgent()
@@ -95,7 +95,7 @@ namespace aegis
             in.cbData = static_cast<DWORD>(value.size());
 
             DATA_BLOB out{};
-            if (!CryptProtectData(&in, L"Aegis Stock Betting AI", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out))
+            if (!CryptProtectData(&in, L"Auralith", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out))
                 return {};
 
             std::vector<unsigned char> bytes(out.pbData, out.pbData + out.cbData);
@@ -326,6 +326,8 @@ namespace aegis
                 config.login_path = value;
             else if (key == "stocks_endpoint")
                 config.stocks_endpoint = value;
+            else if (key == "website_base_url")
+                config.website_base_url = value;
             else if (key == "website_path")
                 config.website_path = value;
             else if (key == "alpha_vantage_api_key")
@@ -403,6 +405,7 @@ namespace aegis
         file << "auth_base_url=" << config.auth_base_url << "\n";
         file << "login_path=" << config.login_path << "\n";
         file << "stocks_endpoint=" << config.stocks_endpoint << "\n";
+        file << "website_base_url=" << config.website_base_url << "\n";
         file << "website_path=" << config.website_path << "\n\n";
 
         file << "[data]\n";

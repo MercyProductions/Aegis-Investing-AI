@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Core">
+      <UniqueIdentifier>{C62CBB08-79BA-4C4C-B737-E22C80E1E211}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Shared">
+      <UniqueIdentifier>{3D5AA699-381F-4730-977E-AB2A91695184}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Docs">
+      <UniqueIdentifier>{15B6D4D4-B404-4023-943C-E75ABDB26246}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\core\CoreIntelligence.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="src\core\CoreMain.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="src\core\CoreService.cpp"><Filter>Core</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\core\CoreIntelligence.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="src\core\CoreService.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="src\persistence\CoreDatabase.h"><Filter>Shared</Filter></ClInclude>
+    <ClInclude Include="src\ai\memory\IntelligenceMemory.h"><Filter>Shared</Filter></ClInclude>
+    <ClInclude Include="src\intelligence\ResearchTimeline.h"><Filter>Shared</Filter></ClInclude>
+    <ClInclude Include="src\resilience\Resilience.h"><Filter>Shared</Filter></ClInclude>
+    <ClInclude Include="src\metrics\InternalMetrics.h"><Filter>Shared</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs\INTELLIGENCE_NETWORK.md"><Filter>Docs</Filter></None>
+    <None Include="docs\CORE_EXTRACTION_PLAN.md"><Filter>Docs</Filter></None>
+    <None Include="docs\WEB_PARITY_THROUGH_CORE.md"><Filter>Docs</Filter></None>
+    <None Include="plugins\README.md"><Filter>Docs</Filter></None>
+  </ItemGroup>
+</Project>

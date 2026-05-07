@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://auralith.local/schemas/plugin-manifest-v1.json",
+  "title": "Auralith Plugin Manifest",
+  "type": "object",
+  "required": ["id", "name", "version", "type", "permissions", "entrypoint", "auralithApi"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$" },
+    "name": { "type": "string" },
+    "version": { "type": "string" },
+    "type": {
+      "type": "string",
+      "enum": ["indicator", "scanner", "report", "provider", "layout", "dashboard", "theme"]
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "market-data:read",
+          "history:read",
+          "portfolio:read",
+          "alerts:read",
+          "alerts:write",
+          "reports:read",
+          "reports:write",
+          "scanner:read",
+          "scanner:write",
+          "providers:network",
+          "secrets:read"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "entrypoint": { "type": "string" },
+    "auralithApi": { "type": "string", "const": "sdk-draft-v1" },
+    "sandbox": { "type": "boolean", "default": true },
+    "description": { "type": "string" }
+  },
+  "not": {
+    "properties": {
+      "permissions": {
+        "contains": { "const": "live-trading:write" }
+      }
+    }
+  },
+  "additionalProperties": false
+}

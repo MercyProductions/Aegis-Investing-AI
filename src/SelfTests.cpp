@@ -5,17 +5,40 @@
 #include "AppSession.h"
 #include "AppStorage.h"
 #include "BrokerImport.h"
+#include "core/CoreIntelligence.h"
 #include "Csv.h"
 #include "Diagnostics.h"
+#include "ai/ResearchNarrative.h"
+#include "audit/AuditManager.h"
+#include "engine/AnalyticsEngine.h"
+#include "engine/MarketEngine.h"
+#include "engine/PortfolioEngine.h"
+#include "engine/RegimeEngine.h"
+#include "engine/RiskEngine.h"
+#include "engine/SignalEngine.h"
+#include "history/HistoricalStore.h"
 #include "ImportValidation.h"
 #include "Json.h"
+#include "ai/memory/IntelligenceMemory.h"
+#include "intelligence/ResearchTimeline.h"
+#include "metrics/InternalMetrics.h"
+#include "paper/PaperBroker.h"
+#include "persistence/CoreDatabase.h"
 #include "PositionSizing.h"
+#include "professional/ProfessionalPlatform.h"
+#include "providers/IMarketProvider.h"
 #include "ProviderLayer.h"
 #include "ReportExport.h"
+#include "reports/ReportComposer.h"
+#include "resilience/Resilience.h"
+#include "sdk/AuralithSDK.h"
 #include "SettingsService.h"
+#include "shared/SharedModels.h"
 #include "StockData.h"
 #include "SymbolRules.h"
 #include "WorkflowValidation.h"
+#include "workflows/DailyIntelligence.h"
+#include "workspaces/WorkspaceProfiles.h"
 
 #include <algorithm>
 #include <cmath>
@@ -72,6 +95,12 @@ namespace aegis
             quote.source = "self-test";
             quote.live = true;
             quote.data_quality = "Self-test provider-backed";
+            quote.provider = quote.source;
+            quote.fetched_at = NowTimeLabel();
+            quote.freshness = "Live";
+            quote.delayed = false;
+            quote.fallback = false;
+            quote.data_confidence = 94;
             return quote;
         }
 
@@ -110,6 +139,11 @@ namespace aegis
         estimated_quote.fundamentals_estimated = true;
         estimated_quote.note = "Demo fallback with estimated metrics.";
         estimated_quote.data_quality = "Demo quote / estimated metrics";
+        estimated_quote.provider = "Demo";
+        estimated_quote.freshness = "Fallback";
+        estimated_quote.delayed = true;
+        estimated_quote.fallback = true;
+        estimated_quote.data_confidence = 55;
         const std::vector<InfoItem> data_quality_rows = BuildQuoteDataQualityRows(estimated_quote);
         runner.Check(DataConfidencePenalty(estimated_quote) > DataConfidencePenalty(quote), "Data confidence decays for demo or estimated quote data");
         runner.Check(!data_quality_rows.empty() &&
@@ -590,10 +624,10 @@ namespace aegis
         settings_input.ui_high_contrast = true;
         settings_input.font_scale_percent = 200;
         settings_config = ApplySettingsInput(settings_config, settings_input);
-        runner.Check(settings_config.watchlist == "AAPL,MSFT" && settings_config.auth_base_url == "http://127.0.0.1:8000", "Settings service normalizes watchlist and auth URL");
+        runner.Check(settings_config.watchlist == "AAPL,MSFT" && settings_config.auth_base_url == "http://127.0.0.1:8000" && settings_config.website_base_url == "http://127.0.0.1:5176", "Settings service normalizes watchlist and bridge URLs");
         runner.Check(settings_config.refresh_seconds == 30 && settings_config.max_symbols == 50 && settings_config.alpha_quote_ttl_seconds == 15, "Settings service clamps provider settings");
         runner.Check(settings_config.ui_compact_mode && settings_config.ui_high_contrast && settings_config.font_scale_percent == 150, "Settings service persists and clamps UI preferences");
-        runner.Check(BuildSettingsHealthRows(settings_config).size() == 8, "Settings service builds health rows");
+        runner.Check(BuildSettingsHealthRows(settings_config).size() == 14, "Settings service builds health and safety rows");
         settings_config.watchlist = "AAPL,MSFT,NVDA";
         settings_config.max_symbols = 2;
         const WatchlistLimitResult limits = ValidateWatchlistLimits(settings_config);
@@ -644,6 +678,125 @@ namespace aegis
         runner.Check(journal_draft.ok && journal_draft.row.symbol == "MSFT", "Workflow validation accepts journal drafts");
         runner.Check(!bad_journal_draft.ok, "Workflow validation rejects journal drafts with missing action");
 
+        Config platform_config;
+        platform_config.paper_only_mode = true;
+        platform_config.require_manual_confirmation = true;
+        const StockState demo_state = MakeDemoStockState();
+        const auto setup_signal = std::find_if(demo_state.signals.begin(), demo_state.signals.end(), [](const StockSignal& signal) {
+            return signal.entry_price > 0.0 && signal.stop_level > 0.0 && signal.target_price > signal.entry_price;
+        });
+        runner.Check(setup_signal != demo_state.signals.end() &&
+            setup_signal->paper_only &&
+            setup_signal->manual_confirmation_required &&
+            setup_signal->risk_reward >= 2.0 &&
+            setup_signal->target1_price > setup_signal->entry_price &&
+            setup_signal->target2_price >= setup_signal->target1_price &&
+            setup_signal->trailing_stop_level >= setup_signal->stop_level &&
+            setup_signal->atr_value > 0.0,
+            "Momentum setup engine produces paper-only plans with manual confirmation");
+        runner.Check(setup_signal != demo_state.signals.end() &&
+            setup_signal->rating.find("Buy") == std::string::npos &&
+            setup_signal->rating.find("Accumulate") == std::string::npos &&
+            setup_signal->entry_idea.find("Paper entry") != std::string::npos &&
+            setup_signal->exit_plan.find("review 50%") != std::string::npos,
+            "Momentum setup language avoids blind buy/sell phrasing and describes expected sell zones");
+        const std::vector<PortfolioHolding> platform_holdings = { { "AAPL", 2.0, 140.0, "Core test" } };
+        runner.Check(!BuildMarketEngineRows(platform_config, demo_state).empty(), "Market engine produces provider and freshness rows");
+        runner.Check(!BuildSignalEngineRows(demo_state).empty(), "Signal engine produces ranking rows");
+        runner.Check(!BuildRegimeEngineRows(demo_state).empty(), "Regime engine produces market posture rows");
+        runner.Check(!BuildRiskEngineRows(platform_config, demo_state, platform_holdings).empty(), "Risk engine produces guardrail rows");
+        runner.Check(!BuildPortfolioEngineRows(demo_state, platform_holdings, platform_config.portfolio_cash).empty(), "Portfolio engine produces paper portfolio rows");
+        runner.Check(!BuildAnalyticsEngineRows(candles, "TEST").empty(), "Analytics engine produces institutional metric rows");
+        runner.Check(!BuildProviderPipelineRows(platform_config, demo_state).empty(), "Provider pipeline produces routing rows");
+        const CoreProviderSnapshot core_provider = BuildCoreProviderSnapshot(platform_config, demo_state);
+        runner.Check(core_provider.quote_count > 0 &&
+            !core_provider.source.empty() &&
+            !core_provider.freshness.empty() &&
+            core_provider.confidence > 0 &&
+            std::any_of(core_provider.rows.begin(), core_provider.rows.end(), [](const InfoItem& row) {
+                return row.name == "Core ownership" && row.label == "Provider layer";
+            }), "AuralithCore owns the provider intelligence snapshot");
+        const std::vector<InfoItem> extraction_rows = BuildCoreExtractionRoadmapRows();
+        runner.Check(extraction_rows.size() == 7 &&
+            extraction_rows.front().name.find("Provider layer") != std::string::npos &&
+            extraction_rows[1].name.find("Scanner engine") != std::string::npos,
+            "AuralithCore extraction roadmap preserves provider-first order");
+        runner.Check(!BuildHistoricalStoreRows(platform_config).empty() && !BuildHistoricalSyncRows(platform_config, demo_state).empty(), "History layer produces store and sync rows");
+        runner.Check(!BuildAuditComplianceRows(platform_config).empty(), "Audit layer produces compliance rows");
+        runner.Check(!BuildReportEngineRows(platform_config, demo_state).empty(), "Report engine produces report workflow rows");
+        runner.Check(BuildDefaultWorkspaceProfiles().size() >= 6 && !BuildWorkspaceProfileRows().empty(), "Workspace profiles define default terminal workflows");
+
+        StockSignal narrative_signal;
+        narrative_signal.symbol = quote.symbol;
+        narrative_signal.rating = "Watch";
+        narrative_signal.score = 68;
+        narrative_signal.thesis = "Self-test signal explanation.";
+        runner.Check(!BuildResearchNarrativeRows(quote, narrative_signal, indicators).empty() &&
+            !BuildMarketNarrativeRows(demo_state).empty() &&
+            !BuildWatchlistAnalystRows(demo_state).empty(), "AI research layer produces disciplined narrative rows");
+
+        PaperOrderRequest paper_request;
+        paper_request.symbol = quote.symbol;
+        paper_request.shares = 5.0;
+        paper_request.limit_price = quote.price;
+        paper_request.manual_confirmed = true;
+        const PaperOrderResult paper_result = SubmitPaperOrder(platform_config, quote, paper_request);
+        runner.Check(paper_result.accepted && paper_result.filled_shares > 0.0 && !paper_result.rows.empty(), "Paper broker simulates guarded paper fills");
+        paper_request.manual_confirmed = false;
+        const PaperOrderResult blocked_paper = SubmitPaperOrder(platform_config, quote, paper_request);
+        runner.Check(blocked_paper.blocked && blocked_paper.state == PaperOrderState::Queued, "Paper broker respects manual confirmation gate");
+        paper_request.manual_confirmed = true;
+        paper_request.force_live = true;
+        const PaperOrderResult blocked_live = SubmitPaperOrder(platform_config, quote, paper_request);
+        runner.Check(blocked_live.blocked && blocked_live.state == PaperOrderState::Rejected, "Paper broker blocks live execution intent");
+
+        const std::vector<PriceAlert> workflow_alerts = { { "AAPL", 150.0, true, true, "Near research level" } };
+        const std::vector<AlertEvent> workflow_events = { { "evt-1", "AAPL|above|150", "AAPL", "above", 150.0, 151.0, NowTimeLabel(), "self-test", "Triggered", false, "", 0 } };
+        const std::vector<SymbolNote> workflow_notes = { { "AAPL", "core", "Watch trend confirmation.", NowTimeLabel() } };
+        const std::vector<JournalEntry> workflow_journal = { { NowTimeLabel(), "AAPL", "Review", "Research", "", "daily", "Chased entry", "B", 0.0 } };
+        runner.Check(!BuildMorningBriefingRows(platform_config, demo_state, platform_holdings, workflow_alerts, workflow_events, storage_rows.trade_plans).empty(), "Morning briefing workflow produces daily preparation rows");
+        runner.Check(!BuildMarketCommandCenterRows(platform_config, demo_state, platform_holdings, workflow_alerts, workflow_events, DailyFocusMode::PortfolioMonitor).empty(), "Market command center workflow produces focus-mode rows");
+        runner.Check(!BuildEndOfDayReviewRows(platform_config, demo_state, platform_holdings, workflow_events, storage_rows.trade_plans, workflow_journal).empty(), "EOD workflow produces review rows");
+        runner.Check(!BuildWeeklyReviewRows(platform_config, demo_state, platform_holdings, storage_rows.trade_plans, workflow_journal).empty(), "Weekly review workflow produces portfolio review rows");
+        runner.Check(!BuildStrategyLabWorkflowRows(platform_config, demo_state, storage_rows.trade_plans, candles).empty(), "Strategy Lab workflow produces strategy analytics rows");
+        runner.Check(!BuildWatchlistIntelligenceRows(demo_state, workflow_alerts, workflow_notes).empty(), "Watchlist intelligence workflow produces scoring rows");
+        runner.Check(!BuildPortfolioRiskConsoleRows(platform_config, demo_state, platform_holdings, workflow_alerts).empty(), "Portfolio risk console workflow produces risk state rows");
+        runner.Check(!BuildSymbolResearchPageRows(platform_config, demo_state, "AAPL", platform_holdings, workflow_alerts, storage_rows.trade_plans, workflow_notes, workflow_journal).empty(), "Symbol research workflow produces complete symbol context rows");
+        runner.Check(!BuildNotificationInboxRows(platform_config, demo_state, workflow_events).empty(), "Notification center workflow produces inbox rows");
+        runner.Check(!BuildCommandPaletteRows().empty() && !BuildSavedLayoutRows().empty() && !BuildImportExportWorkflowRows().empty() && !BuildDataQualityScoreRows(demo_state).empty() && !BuildOnboardingWorkflowRows(platform_config, demo_state, platform_holdings).empty(), "Daily OS utility workflows produce command, layout, import/export, quality, and onboarding rows");
+
+        std::string core_db_status;
+        runner.Check(RunCoreDatabaseSelfTest(core_db_status), "Auralith core SQLite database initializes schema");
+        runner.Check(!BuildCoreDatabaseRows(AppDataDirectory() / "self-test" / "auralith-core-self-test.sqlite").empty(), "Auralith core database produces health rows");
+        runner.Check(!BuildCoreSharedIntelligenceRows(platform_config, demo_state).empty(), "AuralithCore publishes shared intelligence rows");
+        std::vector<InfoItem> core_memory_rows = BuildSymbolMemoryRows(demo_state, workflow_notes, workflow_journal, "AAPL");
+        runner.Check(!core_memory_rows.empty(), "AI symbol memory produces context rows");
+        runner.Check(!BuildPortfolioMemoryRows(demo_state, platform_holdings, workflow_journal).empty(), "AI portfolio memory produces exposure rows");
+        runner.Check(!BuildResearchMemoryRows(demo_state, storage_rows.trade_plans, workflow_journal).empty(), "AI research memory produces continuity rows");
+        runner.Check(!BuildSessionMemoryRows(platform_config, demo_state).empty(), "AI session memory produces restore rows");
+        runner.Check(!BuildResearchTimelineRows(demo_state, "AAPL", workflow_events, storage_rows.trade_plans, workflow_journal, workflow_notes).empty(), "Research timeline produces symbol history rows");
+        runner.Check(!BuildResilienceRows(platform_config, demo_state).empty() && !BuildRecoveryPlanRows().empty(), "Resilience system produces recovery rows");
+        runner.Check(!BuildInternalMetricsRows(platform_config, demo_state).empty(), "Internal metrics produce operational rows");
+        std::string core_snapshot_status;
+        runner.Check(PersistCoreServiceSnapshot(demo_state, core_memory_rows, AppDataDirectory() / "self-test" / "auralith-core-self-test.sqlite", &core_snapshot_status), "Auralith core persists intelligence snapshots");
+        runner.Check(BuildSharedModelContracts().size() >= 8 && !BuildSharedModelContractRows().empty(), "Shared model contracts define desktop/web/core schemas");
+        runner.Check(BuildSdkModules().size() >= 6 && !BuildSdkModuleRows().empty() && !BuildSdkPermissionRows().empty(), "Auralith SDK exposes permission-gated internal modules");
+        runner.Check(!BuildProfessionalArchitectureRows().empty() &&
+            !BuildVisualStrategyBuilderRows().empty() &&
+            !BuildMultiTimeframeIntelligenceRows(demo_state).empty() &&
+            !BuildResearchCollectionRows(demo_state).empty() &&
+            !BuildCorrelationExposureRows(demo_state, platform_holdings).empty() &&
+            !BuildScenarioSimulationRows(demo_state, platform_holdings).empty() &&
+            !BuildResearchCopilotRows(demo_state, workflow_journal).empty() &&
+            !BuildLongTermPortfolioIntelligenceRows(demo_state, platform_holdings, workflow_journal).empty() &&
+            !BuildEnterpriseStabilityRows(platform_config, demo_state).empty() &&
+            !BuildDeploymentPipelineRows().empty() &&
+            !BuildDocumentationStandardsRows().empty() &&
+            !BuildPluginMarketplaceRows().empty() &&
+            !BuildCloudSyncPlanningRows().empty() &&
+            !BuildCrossDeviceEcosystemRows().empty() &&
+            !BuildResearchIdentityRows().empty(), "Professional Platform maturity surfaces produce architecture, SDK, deployment, stability, and ecosystem rows");
+
         AppendDiagnosticEvent({ runner.failed == 0 ? "info" : "error", "self-test", "RunSelfTests", "", runner.failed == 0 ? "passed" : "failed", runner.report.str(), "", 0, 0, false });
 
         std::error_code ec;
@@ -651,7 +804,7 @@ namespace aegis
         std::ofstream file(ReportPath(), std::ios::trunc);
         if (file)
         {
-            file << "Aegis Stock Betting AI self-test\n";
+            file << "Auralith self-test\n";
             file << "Passed: " << runner.passed << "\n";
             file << "Failed: " << runner.failed << "\n\n";
             file << runner.report.str();

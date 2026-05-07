@@ -1,8 +1,10 @@
-# Aegis Stock Betting AI Project To-Do
+# Auralith Project To-Do
 
 Generated: April 27, 2026
 
-This is the working backlog for turning Aegis Stock Betting AI from a powerful prototype into a durable, trustworthy stock research workstation. Use this as the master to-do list.
+This is the working backlog for turning Auralith from a powerful prototype into a durable, trustworthy stock research workstation. Use this as the master to-do list.
+
+Before adding large new features, apply `docs/PRODUCT_DOCTRINE.md`, `docs/PLATFORM_STRATEGY.md`, `docs/CORE_EXTRACTION_PLAN.md`, `docs/WEB_PARITY_THROUGH_CORE.md`, `docs/CROSS_PLATFORM_WEB_PLATFORM.md`, `docs/OPERATIONAL_EXCELLENCE.md`, `docs/LONGEVITY_CHARTER.md`, and `docs/STEWARDSHIP_MODE.md`. Mature Auralith should prioritize refinement, stability, AI memory quality, research continuity, risk intelligence, and workflow clarity over breadth.
 
 ## Priority Legend
 
@@ -10,6 +12,19 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 - P1: Important improvements that materially improve trust, usability, or maintainability.
 - P2: Useful additions once the core foundation is strong.
 - P3: Future expansion ideas.
+
+## Backlog Discipline
+
+- Prefer simplifying, merging, or removing overlapping surfaces before adding new panels.
+- Promote work that improves trust: validation, source/freshness labeling, auditability, confidence scoring, stability, and performance.
+- Promote work that improves Auralith's real differentiators: AI memory, research continuity, portfolio risk intelligence, historical context, scenario simulation, and local-first ownership.
+- Defer work that mainly adds novelty, hype, or screen count.
+- Do not add live-trading ambiguity. Paper mode and manual confirmation remain core safety boundaries.
+- Keep the desktop terminal as the advanced reference implementation while the website matures through shared services, shared contracts, and proven workflows.
+- Do not duplicate business logic across desktop and web just to reach premature browser parity.
+- Extract shared intelligence into AuralithCore in this order: provider layer, scanner engine, alert engine, portfolio engine, report engine, AI systems, historical storage.
+- When the app is feature-complete enough, prioritize curation, intelligence quality, trust, operational maturity, and longevity over expansion.
+- At functional maturity, default to stewardship: maintain, simplify, optimize, and selectively improve existing workflows.
 
 ## Current Foundation Already Started
 
@@ -20,6 +35,13 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 - [x] Structured diagnostics JSONL and audit logging foundation.
 - [x] Configurable SEC user agent/contact field.
 - [x] Basic provider policy/freshness/cache rows.
+- [x] Market data pipeline doctrine captured in `docs/MARKET_DATA_PIPELINE.md`.
+- [x] Desktop-primary and web-companion platform strategy captured in `docs/PLATFORM_STRATEGY.md`.
+- [x] AuralithCore extraction order captured in `docs/CORE_EXTRACTION_PLAN.md`.
+- [x] Initial AuralithCore provider snapshot boundary added in `src/core/CoreIntelligence.*`.
+- [x] Initial web parity contract through AuralithCore captured in `docs/WEB_PARITY_THROUGH_CORE.md`.
+- [x] Cross-platform web platform direction captured in `docs/CROSS_PLATFORM_WEB_PLATFORM.md`.
+- [x] Operational excellence and stewardship checklist captured in `docs/OPERATIONAL_EXCELLENCE.md`.
 - [x] Alert events with acknowledgement/snooze support.
 - [x] Broker import preview/normalization foundation.
 - [x] HTML symbol research report and daily briefing export.
@@ -33,13 +55,17 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 - [x] UI preference persistence for theme, compact mode, font scale, and high contrast.
 - [x] In-app keyboard shortcut and command reference.
 - [x] Data-status badge and breakdown for live, demo, cache, stale, rate-limited, and offline states.
+- [x] Momentum setup engine drafts paper-only plans with entry, invalidation, stop, expected sell zones, trailing stops, risk/reward, confidence, and manual confirmation.
+- [x] First tab extraction started with `src/ui/SettingsTab.*`.
+- [x] Central safety gate scaffold added in `src/services/SafetyGate.*`.
+- [x] Central background task row model added in `src/services/BackgroundTaskManager.*`.
 
 ## Absolutely Needed
 
 ### Architecture And Maintainability
 
 - [ ] P0: Continue refactoring `src/Main.cpp`. It is still far too large and owns too much UI, state, workflow, async, and persistence behavior.
-- [ ] P0: Extract tab renderers into separate modules/classes: `DashboardTab`, `WatchlistTab`, `ScannerTab`, `PortfolioTab`, `ResearchTab`, `ChartLabTab`, `CompareTab`, `JournalTab`, `IntegrationsTab`, and `SettingsTab`.
+- [ ] P0: Continue extracting tab renderers into separate modules/classes: `DashboardTab`, `WatchlistTab`, `ScannerTab`, `PortfolioTab`, `ResearchTab`, `ChartLabTab`, `CompareTab`, `JournalTab`, `IntegrationsTab`; `SettingsTab` has started.
 - [ ] P0: Create a real `AppState` object that owns shared UI state, selected symbol, filters, workflow buffers, and current provider results.
 - [ ] P0: Create service boundaries for `PortfolioService`, `TradePlanService`, `AlertService`, `ResearchService`, `ProviderService`, and `ReportService`.
 - [x] P0: Create initial `SettingsService` boundary for settings normalization, guardrail health, and secret clearing.
@@ -75,7 +101,8 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 - [ ] P0: Finish centralizing provider logic behind one provider interface.
 - [ ] P0: Move direct HTTP/provider work out of scattered modules and into provider clients.
 - [x] P0: Add provider request objects with endpoint, symbol, cache policy, timeout, retry policy, and cancellation ID.
-- [ ] P0: Add provider response metadata everywhere: source, fetched time, cache age, stale/live state, HTTP status, fallback reason, and rate-limit reason.
+- [x] P0: Add first-class quote/provider response metadata for source, fetched time, freshness, fallback, delayed state, and confidence in native and web market objects.
+- [ ] P0: Extend provider response metadata to every history, research, news, filings, report, and scanner object: cache age, HTTP status, fallback reason, and rate-limit reason.
 - [ ] P0: Add cancellation/debouncing for symbol switching, chart loads, research loads, and global refreshes.
 - [ ] P0: Add retry/backoff behavior for provider failures.
 - [x] P0: Add provider rate-limit tracking for Alpha Vantage and SEC.
@@ -117,7 +144,7 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 - [x] P0: Add tests for indicators: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, drawdown, volatility.
 - [x] P0: Add tests for backtest no-lookahead behavior.
 - [x] P0: Add tests for position sizing modes.
-- [x] P0: Add tests for scoring/model explanation.
+- [x] P0: Add tests for scoring/model explanation and paper-only momentum setup boundaries.
 - [x] P0: Add tests for SEC filing parsing and risk-factor diffing.
 - [x] P0: Add tests for alert triggering, duplicate suppression, snooze, acknowledge, and history persistence.
 - [x] P0: Add tests for secret redaction in logs, diagnostics, reports, and backups.
@@ -130,7 +157,7 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 - [x] P0: Ensure every future/background job is cancellable, awaited, or safely ignored before shutdown.
 - [x] P0: Use request IDs consistently for refresh, validation, history, research, alerts, and future provider jobs.
 - [x] P0: Prevent stale provider results from overwriting newer symbol selections.
-- [ ] P0: Add a central task manager for background work.
+- [x] P0: Add the first central task manager model for background work.
 - [x] P0: Add graceful shutdown state with timeout and diagnostics if a provider hangs.
 - [x] P1: Add progress indicators for long-running jobs.
 - [x] P1: Add per-task status rows in Diagnostics.
@@ -152,7 +179,7 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 
 - [ ] P0: Keep research-only guardrails visible across scoring, trade planning, reports, and exports.
 - [ ] P0: Keep paper mode default forever.
-- [ ] P0: Block accidental live trading pathways.
+- [ ] P0: Block accidental live execution pathways.
 - [ ] P0: If broker execution is added later, require explicit unlock, paper/live separation, confirmations, and audit trail.
 - [ ] P0: Add clear all secrets for every stored credential/token.
 - [ ] P0: Ensure API keys never appear in diagnostics, reports, backups, copied text, or crash logs.
@@ -390,7 +417,7 @@ This is the working backlog for turning Aegis Stock Betting AI from a powerful p
 
 ### Phase 1: Clean Foundation
 
-- [ ] P0: Extract Settings tab from `Main.cpp`.
+- [x] P0: Extract Settings tab from `Main.cpp`.
 - [ ] P0: Extract Integrations tab from `Main.cpp`.
 - [ ] P0: Extract Portfolio tab from `Main.cpp`.
 - [ ] P0: Extract Journal tab from `Main.cpp`.

@@ -203,6 +203,6 @@ namespace aegis
 
     std::string BrokerImportInstructions()
     {
-        return "Place robinhood-import.csv, fidelity-import.csv, schwab-import.csv, webull-import.csv, ibkr-import.csv, or broker-import.csv in the app data folder. Aegis maps symbol/ticker, shares/quantity/position, average cost, or total cost basis before importing valid equity rows.";
+        return "Place robinhood-import.csv, fidelity-import.csv, schwab-import.csv, webull-import.csv, ibkr-import.csv, or broker-import.csv in the app data folder. Auralith maps symbol/ticker, shares/quantity/position, average cost, or total cost basis before importing valid equity rows.";
     }
 }

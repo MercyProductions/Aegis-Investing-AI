@@ -1,4 +1,4 @@
--- Aegis Stock Betting AI local store schema v1.
+-- Auralith local store schema v1.
 -- This is the migration target for replacing TSV/CSV persistence with SQLite.
 
 PRAGMA foreign_keys = ON;
@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS trade_journal (
 
 CREATE INDEX IF NOT EXISTS idx_trade_journal_symbol_time ON trade_journal(symbol, time);
 
+CREATE TABLE IF NOT EXISTS app_session (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS provider_cache (
     provider TEXT NOT NULL,
     endpoint TEXT NOT NULL,
@@ -132,4 +138,4 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_action_time ON audit_log(action, timest
 CREATE INDEX IF NOT EXISTS idx_audit_log_symbol_time ON audit_log(symbol, timestamp);
 
 INSERT OR IGNORE INTO schema_migrations(version, applied_at, description)
-VALUES (1, datetime('now'), 'Initial Aegis stock research local store schema');
+VALUES (1, datetime('now'), 'Initial Auralith market research local store schema');

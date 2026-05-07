@@ -16,6 +16,7 @@ build/
 out/
 
 # Build outputs
+node_modules/
 *.exe
 *.dll
 *.lib
@@ -32,6 +33,9 @@ out/
 dist/
 
 # Local runtime data and caches
+website/node_modules/
+website/logs/
+website/data/
 *.db
 *.sqlite
 *.sqlite3
@@ -48,6 +52,8 @@ reports/
 *.secrets.ini
 *.env
 .env*
+!.env.example
+!**/.env.example
 
 # OS noise
 Thumbs.db

@@ -10,6 +10,72 @@
     <Filter Include="ImGui">
       <UniqueIdentifier>{92F37F51-93C2-494F-B3BC-37E1E5EC7E13}</UniqueIdentifier>
     </Filter>
+    <Filter Include="UI">
+      <UniqueIdentifier>{5D3EBB9E-1C46-48F7-80E9-4E34887676F0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Services">
+      <UniqueIdentifier>{72BB98E5-7F98-4684-8D5C-2FC8A1BC35F5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="AI">
+      <UniqueIdentifier>{1E8F2D7A-CB3C-4A0C-9B66-30D84C74E4A8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Audit">
+      <UniqueIdentifier>{3EE02D62-0DC1-4674-9AB3-4EF2B12E1EE2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Engine">
+      <UniqueIdentifier>{9E2D7193-39E7-4778-8D95-98251D646472}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="History">
+      <UniqueIdentifier>{A26A6C8C-04F1-4BC4-9B15-4F2264E3D802}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Paper">
+      <UniqueIdentifier>{E773E2CB-BE43-4A7A-80B7-33F7DA50D9BE}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Providers">
+      <UniqueIdentifier>{6E54DF91-A3E7-4E3D-B023-A13B609D428E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Reports">
+      <UniqueIdentifier>{B9DF669E-125E-46C8-89F7-3CE0D09E2C95}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI Theme">
+      <UniqueIdentifier>{25929A43-C9B4-4B28-A899-B2A61E405197}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Workspaces">
+      <UniqueIdentifier>{C4B6F5E4-41C0-4094-8C9A-A3E2D3067F68}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Workflows">
+      <UniqueIdentifier>{7B729F76-4C38-4386-B936-955A04B84063}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="AI Memory">
+      <UniqueIdentifier>{D6AB6229-4A47-412B-A71E-643F3F70A308}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Persistence">
+      <UniqueIdentifier>{1BA40E9A-2A82-48CB-B7C5-3A9F48A66421}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Intelligence">
+      <UniqueIdentifier>{38162816-78BC-40F6-BC98-F05BFF8B21CA}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resilience">
+      <UniqueIdentifier>{4C1B503C-19E5-46D7-9458-186BB64BE346}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Metrics">
+      <UniqueIdentifier>{9F425FB8-0167-41D0-A55F-F284E33DB515}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Professional Platform">
+      <UniqueIdentifier>{D03C0C3E-A0AE-4A22-B91B-A8DDB0F5D70D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="SDK">
+      <UniqueIdentifier>{A1A9B067-6012-41D4-95F3-D8F73547D94B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Shared">
+      <UniqueIdentifier>{A1DAE6B0-D23C-4D4F-9B68-07310385F4E3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resources">
+      <UniqueIdentifier>{F54C5F87-89E1-4C18-A5D7-6B2B8F873D55}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Docs">
+      <UniqueIdentifier>{7CA7D2F9-0FA9-4C44-8659-BAE873682DCB}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\Json.cpp"><Filter>Source Files</Filter></ClCompile>
@@ -23,13 +89,67 @@
     <ClCompile Include="src\AppSession.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\AppStorage.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\BrokerImport.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\core\CoreIntelligence.cpp"><Filter>Intelligence</Filter></ClCompile>
     <ClCompile Include="src\ReportExport.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\StockData.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\AdvancedAnalytics.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\ProviderLayer.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\SelfTests.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="src\SettingsService.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ai\MarketNarrative.cpp"><Filter>AI</Filter></ClCompile>
+    <ClCompile Include="src\ai\PortfolioReviewer.cpp"><Filter>AI</Filter></ClCompile>
+    <ClCompile Include="src\ai\ResearchSummarizer.cpp"><Filter>AI</Filter></ClCompile>
+    <ClCompile Include="src\ai\RiskNarrative.cpp"><Filter>AI</Filter></ClCompile>
+    <ClCompile Include="src\ai\WatchlistAnalyst.cpp"><Filter>AI</Filter></ClCompile>
+    <ClCompile Include="src\ai\memory\PortfolioMemory.cpp"><Filter>AI Memory</Filter></ClCompile>
+    <ClCompile Include="src\ai\memory\ResearchMemory.cpp"><Filter>AI Memory</Filter></ClCompile>
+    <ClCompile Include="src\ai\memory\SessionMemory.cpp"><Filter>AI Memory</Filter></ClCompile>
+    <ClCompile Include="src\ai\memory\SymbolMemory.cpp"><Filter>AI Memory</Filter></ClCompile>
+    <ClCompile Include="src\audit\AuditManager.cpp"><Filter>Audit</Filter></ClCompile>
+    <ClCompile Include="src\audit\ComplianceGuards.cpp"><Filter>Audit</Filter></ClCompile>
+    <ClCompile Include="src\audit\EventRecorder.cpp"><Filter>Audit</Filter></ClCompile>
+    <ClCompile Include="src\engine\AnalyticsEngine.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="src\engine\MarketEngine.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="src\engine\PortfolioEngine.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="src\engine\RegimeEngine.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="src\engine\RiskEngine.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="src\engine\SignalEngine.cpp"><Filter>Engine</Filter></ClCompile>
+    <ClCompile Include="src\history\CandleRepository.cpp"><Filter>History</Filter></ClCompile>
+    <ClCompile Include="src\history\DataRetention.cpp"><Filter>History</Filter></ClCompile>
+    <ClCompile Include="src\history\HistoricalStore.cpp"><Filter>History</Filter></ClCompile>
+    <ClCompile Include="src\history\HistoricalSync.cpp"><Filter>History</Filter></ClCompile>
+    <ClCompile Include="src\intelligence\ResearchTimeline.cpp"><Filter>Intelligence</Filter></ClCompile>
+    <ClCompile Include="src\metrics\InternalMetrics.cpp"><Filter>Metrics</Filter></ClCompile>
+    <ClCompile Include="src\paper\CommissionModel.cpp"><Filter>Paper</Filter></ClCompile>
+    <ClCompile Include="src\paper\ExecutionAudit.cpp"><Filter>Paper</Filter></ClCompile>
+    <ClCompile Include="src\paper\FillEngine.cpp"><Filter>Paper</Filter></ClCompile>
+    <ClCompile Include="src\paper\PaperBroker.cpp"><Filter>Paper</Filter></ClCompile>
+    <ClCompile Include="src\paper\SlippageModel.cpp"><Filter>Paper</Filter></ClCompile>
+    <ClCompile Include="src\professional\ProfessionalPlatform.cpp"><Filter>Professional Platform</Filter></ClCompile>
+    <ClCompile Include="src\providers\AlphaVantageProvider.cpp"><Filter>Providers</Filter></ClCompile>
+    <ClCompile Include="src\providers\CachedProvider.cpp"><Filter>Providers</Filter></ClCompile>
+    <ClCompile Include="src\providers\DemoProvider.cpp"><Filter>Providers</Filter></ClCompile>
+    <ClCompile Include="src\providers\FinnhubProvider.cpp"><Filter>Providers</Filter></ClCompile>
+    <ClCompile Include="src\providers\PolygonProvider.cpp"><Filter>Providers</Filter></ClCompile>
+    <ClCompile Include="src\persistence\CoreDatabase.cpp"><Filter>Persistence</Filter></ClCompile>
+    <ClCompile Include="src\reports\HtmlRenderer.cpp"><Filter>Reports</Filter></ClCompile>
+    <ClCompile Include="src\reports\PdfRenderer.cpp"><Filter>Reports</Filter></ClCompile>
+    <ClCompile Include="src\reports\ReportComposer.cpp"><Filter>Reports</Filter></ClCompile>
+    <ClCompile Include="src\reports\ResearchTemplates.cpp"><Filter>Reports</Filter></ClCompile>
+    <ClCompile Include="src\resilience\Resilience.cpp"><Filter>Resilience</Filter></ClCompile>
+    <ClCompile Include="src\sdk\AuralithSDK.cpp"><Filter>SDK</Filter></ClCompile>
+    <ClCompile Include="src\services\BackgroundTaskManager.cpp"><Filter>Services</Filter></ClCompile>
+    <ClCompile Include="src\services\SafetyGate.cpp"><Filter>Services</Filter></ClCompile>
+    <ClCompile Include="src\shared\SharedModels.cpp"><Filter>Shared</Filter></ClCompile>
     <ClCompile Include="src\SymbolRules.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ui\AuralithEmbeddedLogo.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="src\ui\AuralithLayout.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="src\ui\AuralithSidebarArt.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="src\ui\AuralithTheme.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="src\ui\AuralithWidgets.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="src\ui\SettingsTab.cpp"><Filter>UI</Filter></ClCompile>
+    <ClCompile Include="src\workflows\DailyIntelligence.cpp"><Filter>Workflows</Filter></ClCompile>
+    <ClCompile Include="src\workspaces\WorkspaceProfiles.cpp"><Filter>Workspaces</Filter></ClCompile>
     <ClCompile Include="src\Main.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="imgui\imgui.cpp"><Filter>ImGui</Filter></ClCompile>
     <ClCompile Include="imgui\imgui_draw.cpp"><Filter>ImGui</Filter></ClCompile>
@@ -50,16 +170,74 @@
     <ClInclude Include="src\AppSession.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\AppStorage.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\BrokerImport.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\core\CoreIntelligence.h"><Filter>Intelligence</Filter></ClInclude>
     <ClInclude Include="src\ReportExport.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\StockData.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\AdvancedAnalytics.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\ProviderLayer.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\SelfTests.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\SettingsService.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ai\ResearchNarrative.h"><Filter>AI</Filter></ClInclude>
+    <ClInclude Include="src\ai\memory\IntelligenceMemory.h"><Filter>AI Memory</Filter></ClInclude>
+    <ClInclude Include="src\audit\AuditManager.h"><Filter>Audit</Filter></ClInclude>
+    <ClInclude Include="src\engine\AnalyticsEngine.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="src\engine\AssetTypes.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="src\engine\MarketEngine.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="src\engine\PortfolioEngine.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="src\engine\RegimeEngine.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="src\engine\RiskEngine.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="src\engine\SignalEngine.h"><Filter>Engine</Filter></ClInclude>
+    <ClInclude Include="src\history\HistoricalStore.h"><Filter>History</Filter></ClInclude>
+    <ClInclude Include="src\intelligence\ResearchTimeline.h"><Filter>Intelligence</Filter></ClInclude>
+    <ClInclude Include="src\metrics\InternalMetrics.h"><Filter>Metrics</Filter></ClInclude>
+    <ClInclude Include="src\paper\PaperBroker.h"><Filter>Paper</Filter></ClInclude>
+    <ClInclude Include="src\persistence\CoreDatabase.h"><Filter>Persistence</Filter></ClInclude>
+    <ClInclude Include="src\professional\ProfessionalPlatform.h"><Filter>Professional Platform</Filter></ClInclude>
+    <ClInclude Include="src\providers\IMarketProvider.h"><Filter>Providers</Filter></ClInclude>
+    <ClInclude Include="src\reports\ReportComposer.h"><Filter>Reports</Filter></ClInclude>
+    <ClInclude Include="src\resilience\Resilience.h"><Filter>Resilience</Filter></ClInclude>
+    <ClInclude Include="src\sdk\AuralithSDK.h"><Filter>SDK</Filter></ClInclude>
+    <ClInclude Include="src\services\BackgroundTaskManager.h"><Filter>Services</Filter></ClInclude>
+    <ClInclude Include="src\services\SafetyGate.h"><Filter>Services</Filter></ClInclude>
+    <ClInclude Include="src\shared\SharedModels.h"><Filter>Shared</Filter></ClInclude>
     <ClInclude Include="src\SymbolRules.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ui\AuralithEmbeddedLogo.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="src\ui\AuralithLayout.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="src\ui\AuralithSidebarArt.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="src\ui\AuralithTheme.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="src\ui\AuralithWidgets.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="src\ui\SettingsTab.h"><Filter>UI</Filter></ClInclude>
+    <ClInclude Include="src\ui\theme\Animations.h"><Filter>UI Theme</Filter></ClInclude>
+    <ClInclude Include="src\ui\theme\Colors.h"><Filter>UI Theme</Filter></ClInclude>
+    <ClInclude Include="src\ui\theme\Icons.h"><Filter>UI Theme</Filter></ClInclude>
+    <ClInclude Include="src\ui\theme\Spacing.h"><Filter>UI Theme</Filter></ClInclude>
+    <ClInclude Include="src\ui\theme\Typography.h"><Filter>UI Theme</Filter></ClInclude>
+    <ClInclude Include="src\ui\theme\Widgets.h"><Filter>UI Theme</Filter></ClInclude>
+    <ClInclude Include="src\workflows\DailyIntelligence.h"><Filter>Workflows</Filter></ClInclude>
+    <ClInclude Include="src\workspaces\WorkspaceProfiles.h"><Filter>Workspaces</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="src\Auralith.rc"><Filter>Resources</Filter></ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="assets\auralith.ico"><Filter>Resources</Filter></Image>
+    <Image Include="assets\logo.png"><Filter>Resources</Filter></Image>
   </ItemGroup>
   <ItemGroup>
     <None Include="AegisStockBettingAI.config.ini" />
     <None Include="README.md" />
+    <None Include="RELEASE_NOTES.md"><Filter>Docs</Filter></None>
+    <None Include="docs\APP_IDENTITY_AND_INSTALLER_PLAN.md"><Filter>Docs</Filter></None>
+    <None Include="docs\AURALITH_MIGRATION_PLAN.md"><Filter>Docs</Filter></None>
+    <None Include="docs\CORE_EXTRACTION_PLAN.md"><Filter>Docs</Filter></None>
+    <None Include="docs\DAILY_INTELLIGENCE_SYSTEM.md"><Filter>Docs</Filter></None>
+    <None Include="docs\INTELLIGENCE_NETWORK.md"><Filter>Docs</Filter></None>
+    <None Include="docs\PROFESSIONAL_PLATFORM.md"><Filter>Docs</Filter></None>
+    <None Include="docs\WEB_PARITY_THROUGH_CORE.md"><Filter>Docs</Filter></None>
+    <None Include="Installer\README.md"><Filter>Docs</Filter></None>
+    <None Include="plugins\README.md"><Filter>Docs</Filter></None>
+    <None Include="plugins\plugin.schema.json"><Filter>Docs</Filter></None>
+    <None Include="SDK\README.md"><Filter>Docs</Filter></None>
+    <None Include="Shared\Models\auralith-contracts.schema.json"><Filter>Docs</Filter></None>
   </ItemGroup>
 </Project>

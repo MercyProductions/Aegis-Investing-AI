@@ -19,8 +19,9 @@ namespace aegis
     {
         std::string auth_base_url = "http://127.0.0.1:8000";
         std::string login_path = "/api/auth/login.php";
-        std::string stocks_endpoint = "/api/stocks-live.php";
-        std::string website_path = "/stock-investing.php";
+        std::string stocks_endpoint = "/api/markets-live.php";
+        std::string website_base_url = "http://127.0.0.1:5176";
+        std::string website_path = "/";
         std::string alpha_vantage_api_key;
         std::string watchlist = "AAPL,MSFT,NVDA,SPY,QQQ,TSLA,AMD,GOOGL";
         int refresh_seconds = 120;
@@ -43,7 +44,7 @@ namespace aegis
         int history_cache_hours = 24;
         int research_cache_hours = 12;
         int max_cache_mb = 250;
-        std::string sec_user_agent = "AegisStockInvestingAI/1.0 (research-only desktop app; contact: gabriel@local.invalid)";
+        std::string sec_user_agent = "Auralith/1.0 (research-only market cockpit; contact: gabriel@local.invalid)";
     };
 
     struct RememberedCredentials
